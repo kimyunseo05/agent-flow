@@ -1,3 +1,9 @@
+# 프로젝트 실행 명령어
+```
+cd /Applications/Library/agent-flow && npm start
+```
+<br><br>
+
 # DB 구조
 <li>MySQL → 관리자 CMS (로그인, 관리자/회원 관리)</li>
 <li>PostgreSQL → 수집부 CMS (수집부, 태그 관리)</li>
