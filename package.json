@@ -1,0 +1,17 @@
+{
+  "name": "member-cms",
+  "version": "1.0.0",
+  "description": "간단한 회원관리 CMS",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "express-session": "^1.18.1",
+    "mysql2": "^3.11.5",
+    "pg": "^8.13.1"
+  }
+}

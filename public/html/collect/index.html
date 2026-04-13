@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>공정 자동화 Ai 에이전트 솔루션 CMS</title>
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body class="dashboard-body" data-nav="collection">
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebarMount" aria-label="메인 메뉴"></aside>
+
+      <div class="main-column">
+        <header class="top-bar">
+          <div class="top-bar-title">
+            <span class="user-badge user-badge--inline" id="userBadge" hidden></span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-ghost--light" id="btnLogout">로그아웃</button>
+        </header>
+
+        <main class="main-content">
+          <section class="main-view main-view--paper">
+            <h1 class="view-heading">수집부 관리</h1>
+            <p class="hint collection-hint" id="collectionMessage" hidden></p>
+
+            <div class="collection-toolbar">
+              <select id="collectionPageSize" class="input-light select-compact" aria-label="페이지당 개수">
+                <option value="10">10개씩</option>
+                <option value="20">20개씩</option>
+                <option value="50">50개씩</option>
+              </select>
+              <input
+                type="search"
+                id="collectionSearch"
+                class="input-light search-input"
+                placeholder="검색어를 입력하세요."
+                autocomplete="off"
+              />
+              <button type="button" class="btn btn-primary-solid" id="btnCollectionAdd">수집부 추가</button>
+            </div>
+
+            <div class="table-wrap table-wrap--light">
+              <table class="data-table data-table--light">
+                <thead>
+                  <tr>
+                    <th>공정명</th>
+                    <th>공정코드</th>
+                    <th>공정상태</th>
+                    <th>사용여부</th>
+                    <th>자동제어여부</th>
+                    <th>비고</th>
+                  </tr>
+                </thead>
+                <tbody id="collectionRows"></tbody>
+              </table>
+              <p class="empty empty--light" id="collectionEmpty">등록된 수집부가 없습니다.</p>
+            </div>
+
+            <div class="collection-footer">
+              <span id="collectionPager" class="pager-info"></span>
+              <div class="pager-btns">
+                <button type="button" class="btn btn-outline-light" id="btnCollectionPrev">이전</button>
+                <button type="button" class="btn btn-outline-light" id="btnCollectionNext">다음</button>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/layout.js"></script>
+    <script src="/js/collection.js"></script>
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        initDashboardPage(() => {
+          if (window.initCollectionView) window.initCollectionView();
+        }).catch(() => {});
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>공정 자동화 Ai 에이전트 솔루션 CMS</title>
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body class="dashboard-body" data-nav="collection">
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebarMount" aria-label="메인 메뉴"></aside>
+
+      <div class="main-column">
+        <header class="top-bar">
+          <div class="top-bar-title">
+            <span class="user-badge user-badge--inline" id="userBadge" hidden></span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-ghost--light" id="btnLogout">로그아웃</button>
+        </header>
+
+        <main class="main-content">
+          <div class="main-view main-view--paper detail-card">
+            <p class="detail-back-wrap">
+              <a href="/html/collect/index.html" class="link-back">← 수집부 목록</a>
+            </p>
+            <h1 class="view-heading">목록 보기</h1>
+            <p class="detail-meta" id="unitMeta" hidden></p>
+            <p class="hint collection-hint" id="listMessage" hidden></p>
+
+            <div class="detail-list-toolbar">
+              <select id="adminPageSize" class="input-light select-compact" aria-label="페이지당 개수">
+                <option value="10">10개씩</option>
+                <option value="20">20개씩</option>
+                <option value="50">50개씩</option>
+              </select>
+
+              <input
+                type="search"
+                id="tagListSearch"
+                class="input-light detail-list-search"
+                placeholder="전체 검색 (tag_id, 데이터타입, 주소, 배율)"
+                autocomplete="off"
+                aria-label="태그 목록 검색"
+              />
+            </div>
+
+            <div id="tagListMount" class="tag-list-mount tag-list-mount--stacked"></div>
+
+            <div class="collection-footer">
+              <span id="adminPager" class="pager-info"></span>
+              <div class="pager-btns">
+                <button type="button" class="btn btn-outline-light" id="btnAdminPrev">이전</button>
+                <button type="button" class="btn btn-outline-light" id="btnAdminNext">다음</button>
+              </div>
+            </div>
+
+            <div class="detail-form-actions" style="margin-top: 1.5rem">
+              <!-- <a href="/html/collect/index.html" class="btn btn-outline-light">목록</a> -->
+              <button type="button" class="btn btn-primary-solid btn-apply" id="btnTagAdd">추가</button>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <template id="tagRowTpl">
+      <div class="tag-row-block">
+        <div class="tag-card__form-box">
+          <div class="tag-grid-row">
+            <div class="tag-grid-label">tag_id</div>
+            <div class="tag-grid-field">
+              <input type="text" class="tag-grid-input js-tag-id" placeholder="tag_id" autocomplete="off" />
+            </div>
+          </div>
+          <div class="tag-grid-row tag-grid-row--split">
+            <div class="tag-grid-col">
+              <label class="tag-grid-label">데이터 타입</label>
+              <select class="tag-grid-select js-data-type" aria-label="데이터 타입">
+                <option value="Boolean">Boolean</option>
+                <option value="Word">Word</option>
+                <option value="DWord" selected>DWord</option>
+              </select>
+            </div>
+            <div class="tag-grid-col tag-grid-col--addr">
+              <label class="tag-addr-caption">주소</label>
+              <div class="tag-addr-stack">
+                <div class="tag-addr-row">
+                  <input type="text" class="tag-grid-input tag-addr-input js-tag-addr" placeholder="주소" autocomplete="off" />
+                  <div class="tag-addr-badge js-tag-addr-badge-1">주소 1</div>
+                </div>
+                <div class="tag-addr-row js-tag-addr-row-2">
+                  <input type="text" class="tag-grid-input tag-addr-input js-tag-addr-2" placeholder="주소 2" autocomplete="off" />
+                  <div class="tag-addr-badge js-tag-addr-badge-2">주소 2</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="tag-grid-row">
+            <div class="tag-grid-label">배율</div>
+            <div class="tag-grid-field">
+              <input type="text" class="tag-grid-input js-tag-ratio" value="1" placeholder="배율" autocomplete="off" />
+            </div>
+          </div>
+        </div>
+        <div class="tag-row-block__foot">
+          <button type="button" class="btn btn-danger-solid btn-sm" data-remove-tag-row>삭제</button>
+          <button type="button" class="btn btn-primary-solid btn-sm" data-save-tag-row>적용</button>
+        </div>
+      </div>
+    </template>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/layout.js"></script>
+    <script src="/js/collect-detail-list.js"></script>
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        initDashboardPage(() => {
+          if (window.initCollectDetailListView) window.initCollectDetailListView();
+        }).catch(() => {});
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>공정 자동화 Ai 에이전트 솔루션 CMS</title>
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body>
+    <div class="layout login-layout">
+      <div class="login-card">
+        <h1 class="login-title">로그인</h1>
+        <p class="hint" id="message" hidden></p>
+        <form id="loginForm">
+          <label>
+            아이디
+            <input type="text" id="username" name="username" required autocomplete="username" />
+          </label>
+          <label>
+            비밀번호
+            <input
+              type="password"
+              id="password"
+              name="password"
+              required
+              autocomplete="current-password"
+            />
+          </label>
+          <button type="submit" class="btn btn-primary btn-block">로그인</button>
+        </form>
+      </div>
+    </div>
+    <script src="/js/login.js"></script>
+  </body>
+</html>
