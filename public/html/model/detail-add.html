@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>공정 자동화 Ai 에이전트 솔루션 CMS</title>
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body class="dashboard-body" data-nav="model">
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebarMount" aria-label="메인 메뉴"></aside>
+
+      <div class="main-column">
+        <header class="top-bar">
+          <div class="top-bar-title">
+            <span class="user-badge user-badge--inline" id="userBadge" hidden></span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-ghost--light" id="btnLogout">로그아웃</button>
+        </header>
+
+        <main class="main-content">
+          <div class="main-view main-view--paper detail-card" style="max-width: 640px; margin: 0 auto">
+            <p class="detail-back-wrap">
+              <a href="/html/model/index.html" class="link-back">← 모델부 목록</a>
+            </p>
+            <h1 class="view-heading">모델 추가</h1>
+            <p class="hint collection-hint" id="addMessage" hidden></p>
+
+            <form id="modelAddForm" class="detail-form">
+              <label class="detail-label">
+                모델명 <span class="req">*</span>
+                <input type="text" id="madName" required autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                모델ID <span class="req">*</span>
+                <input type="text" id="madCode" required autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                구동상태
+                <select id="madStatus">
+                  <option value="정상">정상</option>
+                  <option value="비정상">비정상</option>
+                </select>
+              </label>
+              <label class="detail-label">
+                자동학습여부
+                <select id="madAutoLearn">
+                  <option value="ON">ON</option>
+                  <option value="OFF">OFF</option>
+                </select>
+              </label>
+              <label class="detail-label">
+                자동제어여부
+                <select id="madAutoControl">
+                  <option value="ON">ON</option>
+                  <option value="OFF">OFF</option>
+                </select>
+              </label>
+              <br><br>
+
+              <label class="detail-label">
+                학습 주기
+                <input type="text" id="madLearningCycle" value="7" autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                리샘플 사이즈
+                <input type="text" id="madResampleSize" value="10s" autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                interpolate
+                <select id="madInterpolate">
+                  <option value="on">ON</option>
+                  <option value="off">OFF</option>
+                </select>
+              </label>
+              <label class="detail-label">
+                fill_method
+                <select id="madFillMethod">
+                  <option value="ffill">ffill</option>
+                  <option value="bfill">bfill</option>
+                  <option value="zero">zero</option>
+                </select>
+              </label>
+              <label class="detail-label">
+                모델 파일 생성 위치
+                <input type="text" id="madOutputPath" autocomplete="off" />
+              </label>
+              <br><br>
+              
+              <label class="detail-label">
+                제어 대상 tag_id
+                <input type="text" id="madControlTagId" autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                최소 허용값
+                <input type="text" id="madMinAllowed" value="10" autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                최대 허용값
+                <input type="text" id="madMaxAllowed" value="100" autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                변경 허용 범위
+                <input type="text" id="madChangeRange" value="±5%" autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                자동 적용 여부
+                <select id="madAutoApply">
+                  <option value="after_approval">승인 후</option>
+                  <option value="immediate">즉시</option>
+                </select>
+              </label>
+              <!-- <label class="detail-label">
+                비고
+                <textarea id="madMemo" rows="2" autocomplete="off"></textarea>
+              </label> -->
+
+              <div class="detail-form-actions">
+                <button type="submit" class="btn btn-primary-solid btn-apply" id="btnMadApply">적용</button>
+              </div>
+            </form>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/layout.js"></script>
+    <script src="/js/model-detail-add.js"></script>
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        initDashboardPage(() => {
+          if (window.initModelAddView) window.initModelAddView();
+        }).catch(() => {});
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>공정 자동화 Ai 에이전트 솔루션 CMS</title>
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body class="dashboard-body" data-nav="model">
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebarMount" aria-label="메인 메뉴"></aside>
+
+      <div class="main-column">
+        <header class="top-bar">
+          <div class="top-bar-title">
+            <span class="user-badge user-badge--inline" id="userBadge" hidden></span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-ghost--light" id="btnLogout">로그아웃</button>
+        </header>
+
+        <main class="main-content">
+          <div class="main-view main-view--paper detail-card" style="max-width: 640px; margin: 0 auto">
+            <p class="detail-back-wrap">
+              <a href="/html/model/index.html" class="link-back">← 모델부 목록</a>
+            </p>
+            <h1 class="view-heading">모델부 상세/수정</h1>
+            <p class="detail-meta" id="unitMeta" hidden></p>
+            <p class="hint collection-hint" id="modelMessage" hidden></p>
+
+            <form id="modelDetailForm" class="detail-form">
+              <input type="hidden" id="mdlId" />
+
+              <label class="detail-label">
+                모델명 <span class="req">*</span>
+                <input type="text" id="mdlName" required autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                모델ID <span class="req">*</span>
+                <input type="text" id="mdlCode" required autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                구동상태
+                <select id="mdlStatus">
+                  <option value="정상">정상</option>
+                  <option value="비정상">비정상</option>
+                </select>
+              </label>
+              <label class="detail-label">
+                자동학습여부
+                <select id="mdlAutoLearn">
+                  <option value="ON">ON</option>
+                  <option value="OFF">OFF</option>
+                </select>
+              </label>
+              <label class="detail-label">
+                자동제어여부
+                <select id="mdlAutoControl">
+                  <option value="ON">ON</option>
+                  <option value="OFF">OFF</option>
+                </select>
+              </label>
+              <br><br>
+              
+              <label class="detail-label">
+                학습 주기
+                <input type="text" id="mdlLearningCycle" autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                리샘플 사이즈
+                <input type="text" id="mdlResampleSize" autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                interpolate
+                <select id="mdlInterpolate">
+                  <option value="on">ON</option>
+                  <option value="off">OFF</option>
+                </select>
+              </label>
+              <label class="detail-label">
+                fill_method
+                <select id="mdlFillMethod">
+                  <option value="ffill">ffill</option>
+                  <option value="bfill">bfill</option>
+                  <option value="zero">zero</option>
+                </select>
+              </label>
+              <label class="detail-label">
+                모델 파일 생성 위치
+                <input type="text" id="mdlOutputPath" placeholder="선택한 모델 파일명" autocomplete="off" />
+              </label>
+              <button type="button" class="btn btn-outline-light" id="btnMdlFolder" style="margin: -0.35rem 0 0.75rem">
+                모델 파일 선택
+              </button>
+              <input type="file" id="mdlFolderInput" multiple hidden />
+              <label class="detail-label">
+                모델 생성 일시
+                <input type="text" id="mdlGeneratedAt" readonly class="model-input-readonly" autocomplete="off" />
+              </label>
+              <div class="detail-form-actions detail-form-actions--wrap">
+                <button type="button" class="btn btn-primary-solid" id="btnMdlRefreshAi">AI 모델 갱신</button>
+              </div>
+              <br><br>
+              
+              <label class="detail-label">
+                제어 대상 tag_id
+                <input type="text" id="mdlControlTagId" autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                최소 허용값
+                <input type="text" id="mdlMinAllowed" autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                최대 허용값
+                <input type="text" id="mdlMaxAllowed" autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                변경 허용 범위
+                <input type="text" id="mdlChangeRange" autocomplete="off" />
+              </label>
+              <label class="detail-label">
+                자동 적용 여부
+                <select id="mdlAutoApply">
+                  <option value="after_approval">승인 후</option>
+                  <option value="immediate">즉시</option>
+                </select>
+              </label>
+              <!-- <label class="detail-label">
+                비고
+                <textarea id="mdlMemo" rows="2" autocomplete="off"></textarea>
+              </label> -->
+
+              <div class="detail-form-actions detail-form-actions--wrap">
+                <button type="button" class="btn btn-primary-solid" id="btnMdlToggleAuto">자동 제어 ON/OFF</button>
+              </div>
+              <div class="detail-form-actions">
+                <button type="submit" class="btn btn-primary-solid btn-apply" id="btnMdlApply">적용</button>
+              </div>
+            </form>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/layout.js"></script>
+    <script src="/js/model-detail.js"></script>
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        initDashboardPage(() => {
+          if (window.initModelDetailView) window.initModelDetailView();
+        }).catch(() => {});
+      });
+    </script>
+  </body>
+</html>
