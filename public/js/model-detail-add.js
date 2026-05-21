@@ -19,6 +19,7 @@ function readAddForm() {
   return {
     model_name: document.getElementById("madName")?.value.trim() ?? "",
     model_code: code,
+    table_name: document.getElementById("madTableName")?.value.trim() ?? "",
     status: document.getElementById("madStatus")?.value ?? "정상",
     auto_learn: document.getElementById("madAutoLearn")?.value ?? "ON",
     auto_control: document.getElementById("madAutoControl")?.value ?? "ON",
@@ -56,8 +57,8 @@ function initModelAddView() {
     e.preventDefault();
     showMsg("");
     const body = readAddForm();
-    if (!body.model_name || !body.model_code) {
-      showMsg("모델명과 모델ID는 필수입니다.", "error");
+    if (!body.model_name || !body.model_code || !body.table_name) {
+      showMsg("모델명, 모델ID, 테이블명은 필수입니다.", "error");
       return;
     }
     try {

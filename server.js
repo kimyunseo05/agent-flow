@@ -1,3 +1,4 @@
+require("dotenv").config();
 const path = require("path");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -10,6 +11,9 @@ const mysql = require("mysql2/promise");
 const { Pool } = require("pg");
 const multer = require("multer");
 const SftpClient = require("ssh2-sftp-client");
+const { Client: SshClient } = require("ssh2");
+const { spawn } = require("child_process");
+const WebSocket = require("ws");
 
 /** 비밀번호를 UTF-8 문자열로 SHA-256 해시한 16진 문자열(소문자 64자) */
 function sha256PasswordHex(plain) {
@@ -34,7 +38,7 @@ function passwordMatchesStoredSha256(plain, storedHash) {
  */
 
 const PORT = process.env.PORT || 3000;
-const MODEL_FILE_TARGET_DIR = process.env.MODEL_FILE_TARGET_DIR || "/data/vdb/times/new/models";
+const MODEL_FILE_TARGET_DIR = process.env.MODEL_FILE_TARGET_DIR || "/Users/deiludenseu/Documents/times/new/models";
 const MODEL_FILE_BACKUP_DIR =
   process.env.MODEL_FILE_BACKUP_DIR || path.join(MODEL_FILE_TARGET_DIR, "backup");
 const MODEL_FILE_REMOTE_HOST = String(process.env.MODEL_FILE_REMOTE_HOST || "210.109.80.1").trim();
@@ -46,8 +50,52 @@ const MODEL_FILE_REMOTE_PRIVATE_KEY_PATH = String(
 ).trim();
 const MODEL_FILE_REMOTE_PRIVATE_KEY = process.env.MODEL_FILE_REMOTE_PRIVATE_KEY || "";
 const MODEL_FILE_REMOTE_PASSPHRASE = process.env.MODEL_FILE_REMOTE_PASSPHRASE || "";
-const MODEL_FILE_USE_REMOTE = Boolean(MODEL_FILE_REMOTE_HOST);
+const MODEL_FILE_USE_REMOTE = false; // 로컬 파일 업로드로 전환 (SFTP 권한 문제 해결)
 const UPLOAD_TEMP_DIR = path.join(os.tmpdir(), "agent-flow-model-upload");
+const AI_PYTHON_BIN = process.env.AI_PYTHON_BIN || "/usr/bin/python3";
+const AI_PREDICT_SCRIPT_PATH =
+  process.env.AI_PREDICT_SCRIPT_PATH || "/Users/deiludenseu/Documents/times/new/predict_all_gru_models.py";
+const AI_RUN_ON_REMOTE =
+  String(process.env.AI_RUN_ON_REMOTE || (MODEL_FILE_USE_REMOTE ? "true" : "false")).toLowerCase() ===
+  "true";
+const AI_REMOTE_WORKDIR = process.env.AI_REMOTE_WORKDIR || "/data/vdb/times/new";
+const AI_REMOTE_PYTHON_BIN = process.env.AI_REMOTE_PYTHON_BIN || "python3";
+const AI_REMOTE_SCRIPT_PATH =
+  process.env.AI_REMOTE_SCRIPT_PATH || "/data/vdb/times/new/predict_all_gru_models.py";
+const AI_REMOTE_ENV_NAME = process.env.AI_REMOTE_ENV_NAME || "times";
+const AI_REMOTE_ENV_TYPE = String(process.env.AI_REMOTE_ENV_TYPE || "conda").toLowerCase();
+const AI_REMOTE_VENV_ACTIVATE = process.env.AI_REMOTE_VENV_ACTIVATE || "";
+const POSTGRES_SOCKET_DIR = "/data/vdb/times/postgresql-16.2";
+/** 자정(00:00:00) 실행을 잡기 위한 스케줄러 폴링 간격 */
+const AUTO_LEARN_SCHEDULER_TICK_MS = Math.max(
+  5_000,
+  Number.parseInt(process.env.AUTO_LEARN_SCHEDULER_TICK_MS || "10000", 10) || 10_000
+);
+const AUTO_CONTROL_LOCAL_WORKDIR =
+  process.env.AUTO_CONTROL_LOCAL_WORKDIR || "/Users/deiludenseu/Documents/times/new";
+const AUTO_CONTROL_PYTHON_BIN = process.env.AUTO_CONTROL_PYTHON_BIN || "python3";
+const AUTO_CONTROL_ENV_NAME = process.env.AUTO_CONTROL_ENV_NAME || "times";
+const AUTO_CONTROL_ENV_TYPE = String(process.env.AUTO_CONTROL_ENV_TYPE || "conda").toLowerCase();
+const AUTO_CONTROL_VENV_ACTIVATE = process.env.AUTO_CONTROL_VENV_ACTIVATE || "";
+const AUTO_CONTROL_REMOTE_WORKDIR = process.env.AUTO_CONTROL_REMOTE_WORKDIR || AI_REMOTE_WORKDIR;
+const AUTO_CONTROL_REMOTE_PYTHON_BIN = process.env.AUTO_CONTROL_REMOTE_PYTHON_BIN || AI_REMOTE_PYTHON_BIN;
+const AUTO_CONTROL_REMOTE_ENV_NAME = process.env.AUTO_CONTROL_REMOTE_ENV_NAME || "times";
+const AUTO_CONTROL_REMOTE_ENV_TYPE = String(
+  process.env.AUTO_CONTROL_REMOTE_ENV_TYPE || AI_REMOTE_ENV_TYPE || "conda"
+).toLowerCase();
+const AUTO_CONTROL_REMOTE_VENV_ACTIVATE =
+  process.env.AUTO_CONTROL_REMOTE_VENV_ACTIVATE || AI_REMOTE_VENV_ACTIVATE || "";
+const AUTO_CONTROL_DB_HOST =
+  process.env.AUTO_CONTROL_DB_HOST || process.env.DB_HOST || process.env.PGHOST || POSTGRES_SOCKET_DIR;
+const AUTO_CONTROL_DB_PORT =
+  process.env.AUTO_CONTROL_DB_PORT || process.env.DB_PORT || process.env.PGPORT || "";
+const AUTO_CONTROL_DB_NAME =
+  process.env.AUTO_CONTROL_DB_NAME || process.env.DB_NAME || process.env.PGDATABASE || "";
+const AUTO_CONTROL_DB_USER =
+  process.env.AUTO_CONTROL_DB_USER || process.env.DB_USER || process.env.PGUSER || "";
+const AUTO_CONTROL_DB_PASSWORD =
+  process.env.AUTO_CONTROL_DB_PASSWORD || process.env.DB_PASSWORD || process.env.PGPASSWORD || "";
+const AI_MODEL_DIR = process.env.AI_MODEL_DIR || "/Users/deiludenseu/Documents/times/new/models";
 const modelUpload = multer({
   dest: UPLOAD_TEMP_DIR,
   limits: { fileSize: 1024 * 1024 * 1024, files: 100 },
@@ -65,8 +113,8 @@ const mysqlPool = mysql.createPool({
 });
 
 const pgPool = new Pool({
-  host: process.env.PGHOST || "127.0.0.1",
-  port: Number(process.env.PGPORT) || 5432,
+  host: process.env.PGHOST || "210.109.80.110",
+  port: Number(process.env.PGPORT) || 5433,
   user: process.env.PGUSER || "deiludenseu",
   password: process.env.PGPASSWORD || "",
   database: process.env.PGDATABASE || "agent_flow_collect",
@@ -108,6 +156,7 @@ CREATE TABLE IF NOT EXISTS model_units (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
   model_name VARCHAR(255) NOT NULL,
   model_code VARCHAR(255) NOT NULL,
+  table_name VARCHAR(255) NOT NULL DEFAULT '',
   status VARCHAR(50) NOT NULL DEFAULT '정상',
   auto_learn VARCHAR(10) NOT NULL DEFAULT 'ON',
   auto_control VARCHAR(10) NOT NULL DEFAULT 'ON',
@@ -117,6 +166,8 @@ CREATE TABLE IF NOT EXISTS model_units (
   fill_method VARCHAR(20) NOT NULL DEFAULT 'ffill',
   model_output_path TEXT NULL,
   model_generated_at DATETIME NULL,
+  last_auto_learn_at DATETIME NULL,
+  auto_learn_anchor_at DATETIME NULL,
   control_tag_id VARCHAR(255) NOT NULL DEFAULT '',
   min_allowed VARCHAR(100) NOT NULL DEFAULT '',
   max_allowed VARCHAR(100) NOT NULL DEFAULT '',
@@ -131,6 +182,26 @@ CREATE TABLE IF NOT EXISTS model_units (
 
 async function ensureModelUnitsTable() {
   await mysqlPool.query(MODEL_UNITS_DDL);
+  await mysqlPool.query(
+    "ALTER TABLE model_units ADD COLUMN IF NOT EXISTS table_name VARCHAR(255) NOT NULL DEFAULT '' AFTER model_code"
+  );
+  try {
+    await mysqlPool.query(
+      "ALTER TABLE model_units ADD COLUMN last_auto_learn_at DATETIME NULL AFTER model_generated_at"
+    );
+  } catch (e) {
+    if (e.code !== "ER_DUP_FIELDNAME") throw e;
+  }
+  try {
+    await mysqlPool.query(
+      "ALTER TABLE model_units ADD COLUMN auto_learn_anchor_at DATETIME NULL AFTER last_auto_learn_at"
+    );
+  } catch (e) {
+    if (e.code !== "ER_DUP_FIELDNAME") throw e;
+  }
+  await mysqlPool.query(
+    "UPDATE model_units SET auto_learn_anchor_at = NOW() WHERE auto_learn = 'ON' AND auto_learn_anchor_at IS NULL"
+  );
 }
 
 function formatModelDate(d) {
@@ -148,6 +219,7 @@ function rowToModelUnit(row) {
     id: row.id,
     model_name: row.model_name,
     model_code: row.model_code,
+    table_name: row.table_name ?? "",
     status: row.status ?? "정상",
     auto_learn: row.auto_learn === "OFF" ? "OFF" : "ON",
     auto_control: row.auto_control === "OFF" ? "OFF" : "ON",
@@ -159,6 +231,8 @@ function rowToModelUnit(row) {
       : "ffill",
     model_output_path: row.model_output_path ?? "",
     model_generated_at: formatModelDate(row.model_generated_at),
+    last_auto_learn_at: formatModelDate(row.last_auto_learn_at),
+    auto_learn_anchor_at: formatModelDate(row.auto_learn_anchor_at),
     control_tag_id: row.control_tag_id ?? "",
     min_allowed: row.min_allowed ?? "",
     max_allowed: row.max_allowed ?? "",
@@ -178,6 +252,9 @@ function normalizeModelBody(body, { partial } = {}) {
   }
   if (!partial || Object.prototype.hasOwnProperty.call(b, "model_code")) {
     out.model_code = String(b.model_code ?? "").trim();
+  }
+  if (!partial || Object.prototype.hasOwnProperty.call(b, "table_name")) {
+    out.table_name = String(b.table_name ?? "").trim();
   }
   if (!partial || Object.prototype.hasOwnProperty.call(b, "status")) {
     out.status = b.status === "비정상" ? "비정상" : "정상";
@@ -243,8 +320,11 @@ function resolvePrivateKeyPath(p) {
   return raw;
 }
 
-function createSftpClient() {
-  const sftp = new SftpClient();
+function shellEscapeSingle(v) {
+  return `'${String(v ?? "").replace(/'/g, `'\\''`)}'`;
+}
+
+function getRemoteAuthConfig() {
   const cfg = {
     host: MODEL_FILE_REMOTE_HOST,
     port: MODEL_FILE_REMOTE_PORT,
@@ -267,6 +347,787 @@ function createSftpClient() {
       "원격 업로드 인증 정보가 없습니다. MODEL_FILE_REMOTE_PRIVATE_KEY_PATH(또는 MODEL_FILE_REMOTE_PRIVATE_KEY), MODEL_FILE_REMOTE_PASSWORD 중 하나를 설정하세요."
     );
   }
+  return cfg;
+}
+
+function toLookbackDays(learningCycle) {
+  const raw = String(learningCycle ?? "").trim();
+  const direct = Number.parseInt(raw, 10);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const matched = raw.match(/(\d+)/);
+  if (!matched) return 30;
+  const parsed = Number.parseInt(matched[1], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30;
+}
+
+/**
+ * 학습 주기(일). 예: "7", "7일", "7d" → 7일마다 매일 00:00:00 자동학습
+ */
+function parseLearningCycleDays(learningCycle) {
+  const raw = String(learningCycle ?? "").trim();
+  if (!raw) return 1;
+  const matched = raw.match(/(\d+)/);
+  if (!matched) return 1;
+  const parsed = Number.parseInt(matched[1], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function getAutoLearnAnchorAt(row) {
+  return row.auto_learn_anchor_at || null;
+}
+
+function learningCycleDaysToMs(days) {
+  return days * 86_400_000;
+}
+
+function isMidnightZeroWindow() {
+  const now = new Date();
+  return now.getHours() === 0 && now.getMinutes() === 0 && now.getSeconds() < 30;
+}
+
+function msSinceDatetime(dt) {
+  if (!dt) return Number.POSITIVE_INFINITY;
+  const t = new Date(dt).getTime();
+  if (!Number.isFinite(t)) return Number.POSITIVE_INFINITY;
+  return Date.now() - t;
+}
+
+function getDateKey(d) {
+  const x = d instanceof Date ? d : new Date(d);
+  if (!Number.isFinite(x.getTime())) return null;
+  const y = x.getFullYear();
+  const m = String(x.getMonth() + 1).padStart(2, "0");
+  const day = String(x.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function elapsedMsSince(lastAt) {
+  const ms = msSinceDatetime(lastAt);
+  return ms === Number.POSITIVE_INFINITY ? 0 : ms;
+}
+
+function remainingMsUntilCycle(lastAt, cycleMs) {
+  const elapsed = elapsedMsSince(lastAt);
+  if (!lastAt) return 0;
+  return Math.max(0, cycleMs - elapsed);
+}
+
+/** auto_learn=ON 모델 1건 — 지금 학습해야 하는지 (일 주기, 매일 00:00:00) */
+function shouldRunAutoLearnForModel(row, opts = {}) {
+  const force = opts.force === true;
+  const cycleDays = parseLearningCycleDays(row.learning_cycle);
+  const cycleMs = learningCycleDaysToMs(cycleDays);
+
+  if (force) {
+    return { due: true, reason: "forced", cycle_days: cycleDays, cycle_ms: cycleMs, remaining_ms: 0 };
+  }
+
+  if (!isMidnightZeroWindow()) {
+    return {
+      due: false,
+      reason: "not_midnight",
+      cycle_days: cycleDays,
+      cycle_ms: cycleMs,
+      runs_at: "00:00:00",
+      remaining_ms: remainingMsUntilCycle(getAutoLearnAnchorAt(row), cycleMs),
+      remaining_days: Math.ceil(
+        remainingMsUntilCycle(getAutoLearnAnchorAt(row), cycleMs) / 86_400_000
+      ),
+    };
+  }
+
+  const anchorAt = getAutoLearnAnchorAt(row);
+  if (!anchorAt) {
+    return {
+      due: false,
+      reason: "waiting_anchor",
+      cycle_days: cycleDays,
+      cycle_ms: cycleMs,
+      runs_at: "00:00:00",
+      remaining_days: cycleDays,
+    };
+  }
+
+  const now = new Date();
+  const todayKey = getDateKey(now);
+  const lastTrainKey = row.last_auto_learn_at ? getDateKey(row.last_auto_learn_at) : null;
+  if (lastTrainKey === todayKey) {
+    return { due: false, reason: "already_ran_today", cycle_days: cycleDays, cycle_ms: cycleMs };
+  }
+  if (elapsedMsSince(anchorAt) >= cycleMs) {
+    return {
+      due: true,
+      reason: "midnight_cycle",
+      cycle_days: cycleDays,
+      cycle_ms: cycleMs,
+      runs_at: "00:00:00",
+      remaining_ms: 0,
+    };
+  }
+  const remaining = remainingMsUntilCycle(anchorAt, cycleMs);
+  return {
+    due: false,
+    reason: "cycle_not_elapsed",
+    cycle_days: cycleDays,
+    cycle_ms: cycleMs,
+    remaining_ms: remaining,
+    remaining_days: Math.ceil(remaining / 86_400_000),
+  };
+}
+
+function buildAutoLearnScheduleInfo(model) {
+  if (!model || model.auto_learn !== "ON") return null;
+  const cycleDays = parseLearningCycleDays(model.learning_cycle);
+  return {
+    unit: "days",
+    cycle_days: cycleDays,
+    runs_at: "00:00:00",
+    pipeline: "manual-train",
+    last_auto_learn_at: model.last_auto_learn_at,
+    auto_learn_anchor_at: model.auto_learn_anchor_at,
+  };
+}
+
+const autoLearnRunningIds = new Set();
+
+const MODEL_FILE_BY_TABLE = {
+  air_cleaner_table: "air_cleaner_gru_forecast.pth",
+  table_air_cleaner: "air_cleaner_gru_forecast.pth",
+  capper_table: "capper_gru_forecast.pth",
+  table_capper: "capper_gru_forecast.pth",
+  carton_packer_table: "carton_packer_gru_forecast.pth",
+  table_carton_packer: "carton_packer_gru_forecast.pth",
+  chiller_table: "chiller_gru_forecast.pth",
+  table_chiller: "chiller_gru_forecast.pth",
+  filler_table: "filler_gru_forecast.pth",
+  table_filler: "filler_gru_forecast.pth",
+  robot_packer_table: "robot_packer_gru_forecast.pth",
+  table_robot_packer: "robot_packer_gru_forecast.pth",
+  shrink_tunnel_table: "shrink_tunnel_gru_forecast.pth",
+  table_shrink_tunnel: "shrink_tunnel_gru_forecast.pth",
+};
+
+function inferExpectedModelFile(model) {
+  const tableName = String(model?.table_name ?? "").trim().toLowerCase();
+  if (tableName && MODEL_FILE_BY_TABLE[tableName]) return MODEL_FILE_BY_TABLE[tableName];
+  const code = String(model?.model_code ?? "").trim().toLowerCase();
+  if (code.endsWith(".pth")) return code;
+  return code ? `${code}_gru_forecast.pth` : "";
+}
+
+async function verifyModelArtifactExists(model) {
+  const modelFile = inferExpectedModelFile(model);
+  if (!modelFile) {
+    return { ok: false, model_file: "", path: "", message: "예상 모델 파일명을 계산할 수 없습니다." };
+  }
+  if (AI_RUN_ON_REMOTE) {
+    const cfg = getRemoteAuthConfig();
+    const modelPath = path.posix.join(AI_MODEL_DIR, modelFile);
+    const command = `[ -f ${shellEscapeSingle(modelPath)} ] && echo EXISTS || echo MISSING`;
+    return await new Promise((resolve, reject) => {
+      const conn = new SshClient();
+      let stdout = "";
+      let stderr = "";
+      conn
+        .on("ready", () => {
+          conn.exec(command, (err, stream) => {
+            if (err) return reject(err);
+            stream.on("data", (d) => {
+              stdout += String(d);
+            });
+            stream.stderr.on("data", (d) => {
+              stderr += String(d);
+            });
+            stream.on("close", () => {
+              conn.end();
+              const ok = stdout.includes("EXISTS");
+              resolve({
+                ok,
+                model_file: modelFile,
+                path: modelPath,
+                stdout_tail: stdout.slice(-1000),
+                stderr_tail: stderr.slice(-1000),
+                remote: true,
+              });
+            });
+          });
+        })
+        .on("error", reject)
+        .connect(cfg);
+    });
+  }
+
+  const modelPath = path.join(AI_MODEL_DIR, modelFile);
+  return {
+    ok: fs.existsSync(modelPath),
+    model_file: modelFile,
+    path: modelPath,
+    remote: false,
+  };
+}
+
+async function runAiPredictScript(model) {
+  const lookbackDays = toLookbackDays(model.learning_cycle);
+  const env = {
+    AF_MODEL_NAME: String(model.model_name ?? ""),
+    AF_MODEL_CODE: String(model.model_code ?? ""),
+    AF_TABLE_NAME: String(model.table_name ?? ""),
+    AF_LEARNING_CYCLE: String(model.learning_cycle ?? ""),
+    AF_RESAMPLE_SIZE: String(model.resample_size ?? ""),
+    AF_INTERPOLATE: String(model.interpolate ?? ""),
+    AF_FILL_METHOD: String(model.fill_method ?? ""),
+    AF_MODEL_OUTPUT_PATH: String(model.model_output_path ?? ""),
+    AF_CONTROL_TAG_ID: String(model.control_tag_id ?? ""),
+  };
+
+  if (AI_RUN_ON_REMOTE) {
+    const cfg = getRemoteAuthConfig();
+    const envExports = Object.entries(env)
+      .map(([k, v]) => `export ${k}=${shellEscapeSingle(v)}`)
+      .join(" && ");
+
+    let runCommand;
+    if (AI_REMOTE_ENV_TYPE === "venv") {
+      const activatePath =
+        AI_REMOTE_VENV_ACTIVATE || `${AI_REMOTE_WORKDIR}/${AI_REMOTE_ENV_NAME}/bin/activate`;
+      runCommand = `source ${shellEscapeSingle(activatePath)} && ${shellEscapeSingle(
+        AI_REMOTE_PYTHON_BIN
+      )} ${shellEscapeSingle(AI_REMOTE_SCRIPT_PATH)} ${lookbackDays}`;
+    } else if (AI_REMOTE_ENV_TYPE === "local") {
+      // Use local Python without any environment activation
+      runCommand = `${shellEscapeSingle(AI_REMOTE_PYTHON_BIN)} ${shellEscapeSingle(
+        AI_REMOTE_SCRIPT_PATH
+      )} ${lookbackDays}`;
+    } else {
+      // Default to conda (fallback for remote environments)
+      runCommand =
+        `source /data/vdb/miniconda3/etc/profile.d/conda.sh && conda activate ${shellEscapeSingle(
+          AI_REMOTE_ENV_NAME
+        )} && ${shellEscapeSingle(AI_REMOTE_PYTHON_BIN)} ${shellEscapeSingle(
+          AI_REMOTE_SCRIPT_PATH
+        )} ${lookbackDays}`;
+    }
+    const command = [
+      `cd ${shellEscapeSingle(AI_REMOTE_WORKDIR)}`,
+      envExports,
+      runCommand,
+    ].join(" && ");
+
+    return await new Promise((resolve, reject) => {
+      const conn = new SshClient();
+      let stdout = "";
+      let stderr = "";
+      conn
+        .on("ready", () => {
+          conn.exec(command, (err, stream) => {
+            if (err) return reject(err);
+            stream.on("data", (d) => {
+              stdout += String(d);
+            });
+            stream.stderr.on("data", (d) => {
+              stderr += String(d);
+            });
+            stream.on("close", (code) => {
+              conn.end();
+              resolve({
+                ok: code === 0,
+                exit_code: code,
+                lookback_days: lookbackDays,
+                command,
+                stdout_tail: stdout.slice(-4000),
+                stderr_tail: stderr.slice(-4000),
+                remote: true,
+              });
+            });
+          });
+        })
+        .on("error", reject)
+        .connect(cfg);
+    });
+  }
+
+  if (!fs.existsSync(AI_PREDICT_SCRIPT_PATH)) {
+    throw new Error(`AI 스크립트가 없습니다: ${AI_PREDICT_SCRIPT_PATH}`);
+  }
+  const args = [AI_PREDICT_SCRIPT_PATH, String(lookbackDays)];
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(AI_PYTHON_BIN, args, { env: { ...process.env, ...env } });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({
+        ok: code === 0,
+        exit_code: code,
+        lookback_days: lookbackDays,
+        command: `${AI_PYTHON_BIN} ${args.join(" ")}`,
+        stdout_tail: stdout.slice(-4000),
+        stderr_tail: stderr.slice(-4000),
+        remote: false,
+      });
+    });
+  });
+}
+
+async function runGruTrainingScript(model) {
+  const tableName = String(model.table_name ?? "").trim();
+  const dataDays = toLookbackDays(model.learning_cycle);
+  const resampleInterval = String(model.resample_size ?? "").trim() || "1s";
+  const modelId = String(model.id ?? "");
+  
+  // Determine training script based on table name
+  let trainingScript;
+  if (tableName.includes("air_cleaner")) {
+    trainingScript = "train_air_cleaner_gru.py";
+  } else if (tableName.includes("capper")) {
+    trainingScript = "train_capper_gru.py";
+  } else if (tableName.includes("carton_packer")) {
+    trainingScript = "train_carton_packer_gru.py";
+  } else if (tableName.includes("chiller")) {
+    trainingScript = "train_chiller_gru.py";
+  } else if (tableName.includes("filler")) {
+    trainingScript = "train_filler_gru.py";
+  } else if (tableName.includes("robot_packer")) {
+    trainingScript = "train_robot_packer_gru.py";
+  } else if (tableName.includes("shrink_tunnel")) {
+    trainingScript = "train_shrink_tunnel_gru.py";
+  } else {
+    trainingScript = "train_air_cleaner_gru.py"; // fallback
+  }
+  
+  // 학습 시작 로그 전송
+  console.log(`[DEBUG] 학습 로그 전송 시도: modelId=${modelId}, script=${trainingScript}`);
+  if (global.broadcastTrainingLog) {
+    console.log(`[DEBUG] broadcastTrainingLog 함수 호출됨`);
+    global.broadcastTrainingLog(modelId, {
+      type: 'start',
+      message: `GRU 모델 학습 시작: ${trainingScript}`,
+      timestamp: new Date().toISOString(),
+      script: trainingScript,
+      dataDays: dataDays,
+      resampleInterval: resampleInterval
+    });
+    console.log(`[DEBUG] 학습 시작 로그 전송 완료`);
+  } else {
+    console.log(`[DEBUG] broadcastTrainingLog 함수를 찾을 수 없음`);
+  }
+  const dbEnv = {
+    DB_HOST: AUTO_CONTROL_DB_HOST,
+    DB_PORT: String(AUTO_CONTROL_DB_PORT || ""),
+    DB_NAME: AUTO_CONTROL_DB_NAME,
+    DB_USER: AUTO_CONTROL_DB_USER,
+    DB_PASSWORD: AUTO_CONTROL_DB_PASSWORD,
+  };
+
+  if (AI_RUN_ON_REMOTE) {
+    const cfg = getRemoteAuthConfig();
+    const envExports = Object.entries(dbEnv)
+      .filter(([, v]) => String(v ?? "").trim() !== "")
+      .map(([k, v]) => `export ${k}=${shellEscapeSingle(v)}`)
+      .join(" && ");
+    
+    let runCommand;
+    if (AUTO_CONTROL_REMOTE_ENV_TYPE === "venv") {
+      const activatePath =
+        AUTO_CONTROL_REMOTE_VENV_ACTIVATE ||
+        `${AUTO_CONTROL_REMOTE_WORKDIR}/${AUTO_CONTROL_REMOTE_ENV_NAME}/bin/activate`;
+      runCommand = `source ${shellEscapeSingle(activatePath)} && ${shellEscapeSingle(
+        AUTO_CONTROL_REMOTE_PYTHON_BIN
+      )} training/${trainingScript}`;
+    } else if (AUTO_CONTROL_REMOTE_ENV_TYPE === "local") {
+      runCommand = `${shellEscapeSingle(AUTO_CONTROL_REMOTE_PYTHON_BIN)} training/${trainingScript}`;
+    } else {
+      runCommand =
+        `source /data/vdb/miniconda3/etc/profile.d/conda.sh && conda activate ${shellEscapeSingle(
+          AUTO_CONTROL_REMOTE_ENV_NAME
+        )} && ${shellEscapeSingle(AUTO_CONTROL_REMOTE_PYTHON_BIN)} training/${trainingScript}`;
+    }
+    
+    const command = [
+      `cd ${shellEscapeSingle(AUTO_CONTROL_REMOTE_WORKDIR)}`,
+      envExports,
+      runCommand,
+    ].filter(Boolean).join(" && ");
+
+    return await new Promise((resolve, reject) => {
+      const conn = new SshClient();
+      let stdout = "";
+      let stderr = "";
+      conn
+        .on("ready", () => {
+          conn.exec(command, (err, stream) => {
+            if (err) return reject(err);
+            stream.on("data", (d) => {
+              stdout += String(d);
+            });
+            stream.stderr.on("data", (d) => {
+              stderr += String(d);
+            });
+            stream.on("close", (code) => {
+              conn.end();
+              resolve({
+                ok: code === 0,
+                exit_code: code,
+                command,
+                training_script: trainingScript,
+                data_days: dataDays,
+                resample_interval: resampleInterval,
+                stdout_tail: stdout.slice(-8000), // More lines for training logs
+                stderr_tail: stderr.slice(-4000),
+                remote: true,
+              });
+            });
+          });
+        })
+        .on("error", reject)
+        .connect(cfg);
+    });
+  }
+
+  let command;
+  if (AUTO_CONTROL_ENV_TYPE === "venv") {
+    const activatePath =
+      AUTO_CONTROL_VENV_ACTIVATE || `${AUTO_CONTROL_LOCAL_WORKDIR}/${AUTO_CONTROL_ENV_NAME}/bin/activate`;
+    command = `source ${shellEscapeSingle(activatePath)} && ${shellEscapeSingle(
+      AUTO_CONTROL_PYTHON_BIN
+    )} training/${trainingScript}`;
+  } else if (AUTO_CONTROL_ENV_TYPE === "local") {
+    command = `${shellEscapeSingle(AUTO_CONTROL_PYTHON_BIN)} training/${trainingScript}`;
+  } else {
+    command =
+      `source /opt/homebrew/Caskroom/miniconda/base/etc/profile.d/conda.sh && conda activate ${shellEscapeSingle(
+        AUTO_CONTROL_ENV_NAME
+      )} && ${shellEscapeSingle(AUTO_CONTROL_PYTHON_BIN)} training/${trainingScript}`;
+  }
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn("bash", ["-lc", command], {
+      cwd: AUTO_CONTROL_LOCAL_WORKDIR,
+      env: { ...process.env, ...dbEnv },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      const output = String(chunk);
+      stdout += output;
+      
+      // 실시간으로 학습 로그 전송
+      if (global.broadcastTrainingLog) {
+        global.broadcastTrainingLog(modelId, {
+          type: 'stdout',
+          message: output,
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      const output = String(chunk);
+      stderr += output;
+      
+      // 실시간으로 학습 로그 전송
+      if (global.broadcastTrainingLog) {
+        global.broadcastTrainingLog(modelId, {
+          type: 'stderr',
+          message: output,
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      // 학습 완료 로그 전송
+      if (global.broadcastTrainingLog) {
+        global.broadcastTrainingLog(modelId, {
+          type: 'complete',
+          message: `GRU 모델 학습 완료 (종료 코드: ${code})`,
+          timestamp: new Date().toISOString(),
+          exitCode: code,
+          success: code === 0
+        });
+      }
+      
+      resolve({
+        ok: code === 0,
+        exit_code: code,
+        command,
+        training_script: trainingScript,
+        data_days: dataDays,
+        resample_interval: resampleInterval,
+        stdout_tail: stdout.slice(-8000), // More lines for training logs
+        stderr_tail: stderr.slice(-4000),
+        remote: false,
+      });
+    });
+  });
+}
+
+/** 수동 학습 버튼과 동일: runGruTrainingScript → DB 갱신 */
+async function executeModelTraining(modelId) {
+  const id = Number(modelId);
+  const [rows] = await mysqlPool.query("SELECT * FROM model_units WHERE id = ?", [id]);
+  if (!rows[0]) {
+    const err = new Error("모델을 찾을 수 없습니다.");
+    err.status = 404;
+    throw err;
+  }
+  const model = rowToModelUnit(rows[0]);
+  const trainingRun = await runGruTrainingScript(model);
+  if (trainingRun.ok) {
+    await mysqlPool.query(
+      `UPDATE model_units SET
+        model_generated_at = NOW(),
+        last_auto_learn_at = NOW(),
+        auto_learn_anchor_at = NOW()
+      WHERE id = ?`,
+      [id]
+    );
+  }
+  const [updated] = await mysqlPool.query("SELECT * FROM model_units WHERE id = ?", [id]);
+  return { model: rowToModelUnit(updated[0]), training_run: trainingRun };
+}
+
+async function tickAutoLearnScheduler(opts = {}) {
+  const force = opts.force === true;
+  const [rows] = await mysqlPool.query("SELECT * FROM model_units WHERE auto_learn = 'ON'");
+  const ran = [];
+  const checked_at = new Date().toISOString();
+
+  for (const row of rows) {
+    const id = row.id;
+    if (autoLearnRunningIds.has(id)) {
+      ran.push({ id, skipped: true, reason: "already_running" });
+      continue;
+    }
+
+    const schedule = shouldRunAutoLearnForModel(row, { force });
+    if (!schedule.due) {
+      ran.push({
+        id,
+        skipped: true,
+        reason: schedule.reason,
+        remaining_days: schedule.remaining_days,
+        last_auto_learn_at: formatModelDate(row.last_auto_learn_at),
+        learning_cycle: row.learning_cycle,
+      });
+      continue;
+    }
+
+    autoLearnRunningIds.add(id);
+    try {
+      const cycleDays = schedule.cycle_days ?? parseLearningCycleDays(row.learning_cycle);
+      console.log(
+        `[자동학습] 모델 ${id} 수동학습 파이프라인 실행 (${cycleDays}일, 00:00:00, ${schedule.reason})`
+      );
+      const { training_run: trainingRun } = await executeModelTraining(id);
+      ran.push({
+        id,
+        ok: trainingRun.ok,
+        exit_code: trainingRun.exit_code,
+        forced: force,
+        reason: schedule.reason,
+      });
+      if (!trainingRun.ok) {
+        console.error(
+          `[자동학습] 모델 ${id} 실패:`,
+          trainingRun.stderr_tail || trainingRun.stdout_tail || trainingRun.exit_code
+        );
+      }
+    } catch (e) {
+      console.error(`[자동학습] 모델 ${id} 오류:`, e);
+      ran.push({ id, ok: false, error: String(e.message || e) });
+    } finally {
+      autoLearnRunningIds.delete(id);
+    }
+  }
+  return { ran, forced: force, checked_at };
+}
+
+function startAutoLearnScheduler() {
+  setInterval(() => {
+    tickAutoLearnScheduler().catch((e) => console.error("[자동학습 스케줄러]", e));
+  }, AUTO_LEARN_SCHEDULER_TICK_MS);
+  console.log(
+    `[자동학습] 스케줄러 시작 (${AUTO_LEARN_SCHEDULER_TICK_MS / 1000}s tick) — 일 주기, 매일 00:00:00, 수동학습 동일 파이프라인`
+  );
+}
+
+async function runSpecificPredictScript(model) {
+  const modelFile = inferExpectedModelFile(model);
+  if (!modelFile) {
+    throw new Error("자동 제어용 모델 파일명을 계산할 수 없습니다.");
+  }
+
+  const dataDays = toLookbackDays(model.learning_cycle);
+  const tableName = String(model.table_name ?? "").trim();
+  const resampleInterval = String(model.resample_size ?? "").trim() || "1s";
+  const payload = {
+    model_file: modelFile,
+    table_name: tableName,
+    data_days: dataDays,
+    resample_interval: resampleInterval,
+    control_tag_id: String(model.control_tag_id ?? ""),
+    min_allowed: String(model.min_allowed ?? ""),
+    max_allowed: String(model.max_allowed ?? ""),
+    change_range: String(model.change_range ?? ""),
+    auto_apply: String(model.auto_apply ?? ""),
+  };
+  const payloadJson = JSON.stringify(payload);
+
+  const inlineCode = [
+    "import json, sys",
+    "from pathlib import Path",
+    "sys.path.append(str(Path.cwd()))",
+    "from predict_specific_gru_model import predict_with_model",
+    "payload = json.loads(sys.argv[1])",
+    "result = predict_with_model(",
+    "    model_file=payload['model_file'],",
+    "    table_name=payload.get('table_name') or None,",
+    "    data_days=int(payload.get('data_days') or 30),",
+    "    resample_interval=payload.get('resample_interval') or '1s'",
+    ")",
+    "print(json.dumps({'success': True, 'payload': payload, 'data': result}, ensure_ascii=False))",
+  ].join("\n");
+  const dbEnv = {
+    DB_HOST: AUTO_CONTROL_DB_HOST,
+    DB_PORT: String(AUTO_CONTROL_DB_PORT || ""),
+    DB_NAME: AUTO_CONTROL_DB_NAME,
+    DB_USER: AUTO_CONTROL_DB_USER,
+    DB_PASSWORD: AUTO_CONTROL_DB_PASSWORD,
+  };
+
+  if (AI_RUN_ON_REMOTE) {
+    const cfg = getRemoteAuthConfig();
+    const envExports = Object.entries(dbEnv)
+      .filter(([, v]) => String(v ?? "").trim() !== "")
+      .map(([k, v]) => `export ${k}=${shellEscapeSingle(v)}`)
+      .join(" && ");
+    let runCommand;
+    if (AUTO_CONTROL_REMOTE_ENV_TYPE === "venv") {
+      const activatePath =
+        AUTO_CONTROL_REMOTE_VENV_ACTIVATE ||
+        `${AUTO_CONTROL_REMOTE_WORKDIR}/${AUTO_CONTROL_REMOTE_ENV_NAME}/bin/activate`;
+      runCommand = `source ${shellEscapeSingle(activatePath)} && ${shellEscapeSingle(
+        AUTO_CONTROL_REMOTE_PYTHON_BIN
+      )} -c ${shellEscapeSingle(inlineCode)} ${shellEscapeSingle(payloadJson)}`;
+    } else if (AUTO_CONTROL_REMOTE_ENV_TYPE === "local") {
+      // Use local Python without any environment activation
+      runCommand = `${shellEscapeSingle(AUTO_CONTROL_REMOTE_PYTHON_BIN)} -c ${shellEscapeSingle(
+        inlineCode
+      )} ${shellEscapeSingle(payloadJson)}`;
+    } else {
+      // Default to conda (fallback for remote environments)
+      runCommand =
+        `source /data/vdb/miniconda3/etc/profile.d/conda.sh && conda activate ${shellEscapeSingle(
+          AUTO_CONTROL_REMOTE_ENV_NAME
+        )} && ${shellEscapeSingle(AUTO_CONTROL_REMOTE_PYTHON_BIN)} -c ${shellEscapeSingle(
+          inlineCode
+        )} ${shellEscapeSingle(payloadJson)}`;
+    }
+    const command = [
+      `cd ${shellEscapeSingle(AUTO_CONTROL_REMOTE_WORKDIR)}`,
+      envExports,
+      runCommand,
+    ]
+      .filter(Boolean)
+      .join(" && ");
+
+    return await new Promise((resolve, reject) => {
+      const conn = new SshClient();
+      let stdout = "";
+      let stderr = "";
+      conn
+        .on("ready", () => {
+          conn.exec(command, (err, stream) => {
+            if (err) return reject(err);
+            stream.on("data", (d) => {
+              stdout += String(d);
+            });
+            stream.stderr.on("data", (d) => {
+              stderr += String(d);
+            });
+            stream.on("close", (code) => {
+              conn.end();
+              resolve({
+                ok: code === 0,
+                exit_code: code,
+                command,
+                model_file: modelFile,
+                data_days: dataDays,
+                resample_interval: resampleInterval,
+                stdout_tail: stdout.slice(-4000),
+                stderr_tail: stderr.slice(-4000),
+                remote: true,
+              });
+            });
+          });
+        })
+        .on("error", reject)
+        .connect(cfg);
+    });
+  }
+
+  let command;
+  if (AUTO_CONTROL_ENV_TYPE === "venv") {
+    const activatePath =
+      AUTO_CONTROL_VENV_ACTIVATE || `${AUTO_CONTROL_LOCAL_WORKDIR}/${AUTO_CONTROL_ENV_NAME}/bin/activate`;
+    command = `source ${shellEscapeSingle(activatePath)} && ${shellEscapeSingle(
+      AUTO_CONTROL_PYTHON_BIN
+    )} -c ${shellEscapeSingle(inlineCode)} ${shellEscapeSingle(payloadJson)}`;
+  } else if (AUTO_CONTROL_ENV_TYPE === "local") {
+    // Use local Python without any environment activation
+    command = `${shellEscapeSingle(AUTO_CONTROL_PYTHON_BIN)} -c ${shellEscapeSingle(
+      inlineCode
+    )} ${shellEscapeSingle(payloadJson)}`;
+  } else {
+    // Default to conda (fallback for remote environments)
+    command =
+      `source /opt/homebrew/Caskroom/miniconda/base/etc/profile.d/conda.sh && conda activate ${shellEscapeSingle(
+        AUTO_CONTROL_ENV_NAME
+      )} && ${shellEscapeSingle(AUTO_CONTROL_PYTHON_BIN)} -c ${shellEscapeSingle(
+        inlineCode
+      )} ${shellEscapeSingle(payloadJson)}`;
+  }
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn("bash", ["-lc", command], {
+      cwd: AUTO_CONTROL_LOCAL_WORKDIR,
+      env: { ...process.env, ...dbEnv },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({
+        ok: code === 0,
+        exit_code: code,
+        command,
+        model_file: modelFile,
+        data_days: dataDays,
+        resample_interval: resampleInterval,
+        stdout_tail: stdout.slice(-4000),
+        stderr_tail: stderr.slice(-4000),
+        remote: false,
+      });
+    });
+  });
+}
+
+function createSftpClient() {
+  const sftp = new SftpClient();
+  const cfg = getRemoteAuthConfig();
   return { sftp, cfg };
 }
 
@@ -276,14 +1137,15 @@ async function seedModelUnitsIfEmpty() {
   if (c === 0) {
     await mysqlPool.query(
       `INSERT INTO model_units (
-        model_name, model_code, status, auto_learn, auto_control,
+        model_name, model_code, table_name, status, auto_learn, auto_control,
         learning_cycle, resample_size, interpolate, fill_method,
         control_tag_id, min_allowed, max_allowed, change_range, auto_apply,
         model_generated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
         "에어크리너",
         "TAC30201_AL_00007",
+        "air_cleaner_table",
         "정상",
         "ON",
         "ON",
@@ -840,6 +1702,47 @@ app.get(
 );
 
 app.get(
+  "/api/model-units/scheduler/status",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const [rows] = await mysqlPool.query(
+      "SELECT id, model_name, auto_learn, learning_cycle, last_auto_learn_at, auto_learn_anchor_at FROM model_units WHERE auto_learn = 'ON'"
+    );
+    res.json({
+      tick_interval_seconds: AUTO_LEARN_SCHEDULER_TICK_MS / 1000,
+      pipeline: "executeModelTraining (= 수동학습 runGruTrainingScript)",
+      models: rows.map((r) => {
+        const schedule = shouldRunAutoLearnForModel(r);
+        const cycleDays = parseLearningCycleDays(r.learning_cycle);
+        return {
+          id: r.id,
+          model_name: r.model_name,
+          learning_cycle: r.learning_cycle,
+          cycle_unit: "days",
+          cycle_days: cycleDays,
+          last_auto_learn_at: formatModelDate(r.last_auto_learn_at),
+          auto_learn_anchor_at: formatModelDate(r.auto_learn_anchor_at),
+          due_now: schedule.due,
+          reason: schedule.reason,
+          runs_at: "00:00:00",
+          remaining_days: schedule.remaining_days,
+        };
+      }),
+      hint: "학습 주기=일(예: 7, 7일). auto_learn=ON, 매일 00:00:00. POST scheduler/tick = 즉시 1회",
+    });
+  })
+);
+
+app.post(
+  "/api/model-units/scheduler/tick",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const result = await tickAutoLearnScheduler({ force: true });
+    res.json(result);
+  })
+);
+
+app.get(
   "/api/model-units/:id",
   requireAuth,
   asyncHandler(async (req, res) => {
@@ -856,19 +1759,20 @@ app.post(
   requireAuth,
   asyncHandler(async (req, res) => {
     const m = normalizeModelBody(req.body, { partial: false });
-    if (!m.model_name || !m.model_code) {
-      return res.status(400).json({ error: "모델명과 모델ID는 필수입니다." });
+    if (!m.model_name || !m.model_code || !m.table_name) {
+      return res.status(400).json({ error: "모델명, 모델ID, 테이블명은 필수입니다." });
     }
     try {
       const [result] = await mysqlPool.query(
         `INSERT INTO model_units (
-          model_name, model_code, status, auto_learn, auto_control,
+          model_name, model_code, table_name, status, auto_learn, auto_control,
           learning_cycle, resample_size, interpolate, fill_method, model_output_path,
           model_generated_at, control_tag_id, min_allowed, max_allowed, change_range, auto_apply, memo
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)`,
         [
           m.model_name,
           m.model_code,
+          m.table_name,
           m.status,
           m.auto_learn,
           m.auto_control,
@@ -886,6 +1790,12 @@ app.post(
         ]
       );
       const insertId = result.insertId;
+      if (m.auto_learn === "ON") {
+        await mysqlPool.query(
+          "UPDATE model_units SET auto_learn_anchor_at = NOW() WHERE id = ?",
+          [insertId]
+        );
+      }
       const [rows] = await mysqlPool.query("SELECT * FROM model_units WHERE id = ?", [insertId]);
       res.status(201).json(rowToModelUnit(rows[0]));
     } catch (e) {
@@ -906,22 +1816,25 @@ app.put(
     if (!exist[0]) return res.status(404).json({ error: "모델을 찾을 수 없습니다." });
 
     const m = normalizeModelBody(req.body, { partial: false });
-    if (!m.model_name || !m.model_code) {
-      return res.status(400).json({ error: "모델명과 모델ID는 필수입니다." });
+    if (!m.model_name || !m.model_code || !m.table_name) {
+      return res.status(400).json({ error: "모델명, 모델ID, 테이블명은 필수입니다." });
     }
     const bumpGen = Boolean(req.body?.bump_model_generated_at);
+    const anchorOn = m.auto_learn === "ON";
 
     try {
       await mysqlPool.query(
         `UPDATE model_units SET
-          model_name = ?, model_code = ?, status = ?, auto_learn = ?, auto_control = ?,
+          model_name = ?, model_code = ?, table_name = ?, status = ?, auto_learn = ?, auto_control = ?,
           learning_cycle = ?, resample_size = ?, interpolate = ?, fill_method = ?, model_output_path = ?,
           control_tag_id = ?, min_allowed = ?, max_allowed = ?, change_range = ?, auto_apply = ?, memo = ?,
-          model_generated_at = IF(?, NOW(), model_generated_at)
+          model_generated_at = IF(?, NOW(), model_generated_at),
+          auto_learn_anchor_at = IF(?, NOW(), NULL)
         WHERE id = ?`,
         [
           m.model_name,
           m.model_code,
+          m.table_name,
           m.status,
           m.auto_learn,
           m.auto_control,
@@ -937,11 +1850,19 @@ app.put(
           m.auto_apply,
           m.memo,
           bumpGen ? 1 : 0,
+          anchorOn ? 1 : 0,
           id,
         ]
       );
       const [rows] = await mysqlPool.query("SELECT * FROM model_units WHERE id = ?", [id]);
-      res.json(rowToModelUnit(rows[0]));
+      const savedModel = rowToModelUnit(rows[0]);
+
+      const schedule = buildAutoLearnScheduleInfo(savedModel);
+      res.json({
+        model: savedModel,
+        auto_learn_schedule: schedule,
+        auto_learn_anchor_reset: anchorOn,
+      });
     } catch (e) {
       if (e.code === "ER_DUP_ENTRY") {
         return res.status(409).json({ error: "이미 등록된 모델ID입니다." });
@@ -952,41 +1873,125 @@ app.put(
 );
 
 app.post(
+  "/api/model-units/:id/auto-control",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const [exist] = await mysqlPool.query("SELECT id FROM model_units WHERE id = ?", [id]);
+    if (!exist[0]) return res.status(404).json({ error: "모델을 찾을 수 없습니다." });
+
+    const m = normalizeModelBody(req.body, { partial: false });
+    if (!m.model_name || !m.model_code || !m.table_name) {
+      return res.status(400).json({ error: "모델명, 모델ID, 테이블명은 필수입니다." });
+    }
+
+    await mysqlPool.query(
+      `UPDATE model_units SET
+        model_name = ?, model_code = ?, table_name = ?, status = ?, auto_learn = ?, auto_control = ?,
+        learning_cycle = ?, resample_size = ?, interpolate = ?, fill_method = ?, model_output_path = ?,
+        control_tag_id = ?, min_allowed = ?, max_allowed = ?, change_range = ?, auto_apply = ?, memo = ?
+      WHERE id = ?`,
+      [
+        m.model_name,
+        m.model_code,
+        m.table_name,
+        m.status,
+        m.auto_learn,
+        m.auto_control,
+        m.learning_cycle,
+        m.resample_size,
+        m.interpolate,
+        m.fill_method,
+        m.model_output_path,
+        m.control_tag_id || m.model_code,
+        m.min_allowed,
+        m.max_allowed,
+        m.change_range,
+        m.auto_apply,
+        m.memo,
+        id,
+      ]
+    );
+
+    const [rows] = await mysqlPool.query("SELECT * FROM model_units WHERE id = ?", [id]);
+    const savedModel = rowToModelUnit(rows[0]);
+    if (savedModel.auto_control !== "ON") {
+      return res.json({ model: savedModel, auto_control_run: null });
+    }
+
+    const predictionRun = await runSpecificPredictScript(savedModel);
+
+    if (!predictionRun.ok) {
+      const detail = predictionRun.stderr_tail || predictionRun.stdout_tail || "예측 로그가 없습니다.";
+      return res.status(500).json({
+        error: `자동 제어 실행에 실패했습니다. ${detail}`,
+        model: savedModel,
+        auto_control_run: predictionRun,
+      });
+    }
+
+    return res.json({
+      model: savedModel,
+      auto_control_run: predictionRun,
+    });
+  })
+);
+
+app.post(
   "/api/model-units/:id/refresh-files",
   requireAuth,
   modelUpload.array("modelFiles"),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
-    const [existRows] = await mysqlPool.query("SELECT id FROM model_units WHERE id = ?", [id]);
-    if (!existRows[0]) return res.status(404).json({ error: "모델을 찾을 수 없습니다." });
+    const files = req.files || [];
 
-    const files = Array.isArray(req.files) ? req.files : [];
-    if (files.length === 0) {
-      return res.status(400).json({ error: "업로드할 파일을 선택하세요." });
+    if (!files.length) {
+      return res.status(400).json({ error: "업로드할 모델 파일을 선택하세요." });
     }
 
-    let body;
-    try {
-      body = JSON.parse(String(req.body?.modelBody ?? "{}"));
-    } catch {
-      return res.status(400).json({ error: "모델 정보 형식이 올바르지 않습니다." });
+    // 기존 데이터 조회
+    const [rows] = await mysqlPool.query(
+      "SELECT * FROM model_units WHERE id = ?",
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "모델을 찾을 수 없습니다." });
     }
-    const m = normalizeModelBody(body, { partial: false });
-    if (!m.model_name || !m.model_code) {
-      return res.status(400).json({ error: "모델명과 모델ID는 필수입니다." });
+
+    // FormData에서 modelBody 파싱
+    let m = {};
+    if (req.body && req.body.modelBody) {
+      try {
+        m = JSON.parse(req.body.modelBody);
+      } catch (e) {
+        console.error('[DEBUG] modelBody 파싱 실패:', e);
+        return res.status(400).json({
+          error: "modelBody 파싱에 실패했습니다.",
+        });
+      }
+    }
+
+    if (!m.model_name || !m.model_code || !m.table_name) {
+      return res.status(400).json({
+        error: "모델명, 모델ID, 테이블명은 필수입니다.",
+      });
     }
 
     const ts = backupSuffix();
     const uploaded = [];
     const backedUp = [];
     const tempPaths = [];
+
     if (MODEL_FILE_USE_REMOTE) {
       if (!MODEL_FILE_REMOTE_USER) {
-        return res
-          .status(500)
-          .json({ error: "MODEL_FILE_REMOTE_USER 설정이 필요합니다." });
+        return res.status(500).json({
+          error: "MODEL_FILE_REMOTE_USER 설정이 필요합니다.",
+        });
       }
+
       const { sftp, cfg } = createSftpClient();
+
       try {
         await sftp.connect(cfg);
         await sftp.mkdir(MODEL_FILE_TARGET_DIR, true);
@@ -994,47 +1999,72 @@ app.post(
 
         for (const file of files) {
           tempPaths.push(file.path);
-          const name = path.basename(file.originalname || file.filename || "");
+          const name = path.basename(
+            file.originalname || file.filename || ""
+          );
           if (!name) continue;
-          const remoteTargetPath = path.posix.join(MODEL_FILE_TARGET_DIR, name);
-          const remoteBackupPath = path.posix.join(MODEL_FILE_BACKUP_DIR, `${name}.${ts}.bak`);
+
+          const remoteTargetPath = path.posix.join(
+            MODEL_FILE_TARGET_DIR,
+            name
+          );
+          const remoteBackupPath = path.posix.join(
+            MODEL_FILE_BACKUP_DIR,
+            `${name}.${ts}.bak`
+          );
+
           const exists = await sftp.exists(remoteTargetPath);
           if (exists) {
             await sftp.rename(remoteTargetPath, remoteBackupPath);
             backedUp.push(path.posix.basename(remoteBackupPath));
           }
+
           await sftp.put(file.path, remoteTargetPath);
           uploaded.push(name);
         }
       } finally {
         await sftp.end().catch(() => {});
-        await Promise.allSettled(tempPaths.map((p) => fsp.unlink(p).catch(() => {})));
+        await Promise.allSettled(
+          tempPaths.map((p) => fsp.unlink(p).catch(() => {}))
+        );
       }
     } else {
       await fsp.mkdir(MODEL_FILE_TARGET_DIR, { recursive: true });
       await fsp.mkdir(MODEL_FILE_BACKUP_DIR, { recursive: true });
+
       try {
         for (const file of files) {
           tempPaths.push(file.path);
-          const name = path.basename(file.originalname || file.filename || "");
+          const name = path.basename(
+            file.originalname || file.filename || ""
+          );
           if (!name) continue;
+
           const targetPath = path.join(MODEL_FILE_TARGET_DIR, name);
+
           if (fs.existsSync(targetPath)) {
-            const backupPath = path.join(MODEL_FILE_BACKUP_DIR, `${name}.${ts}.bak`);
+            const backupPath = path.join(
+              MODEL_FILE_BACKUP_DIR,
+              `${name}.${ts}.bak`
+            );
             await fsp.copyFile(targetPath, backupPath);
             backedUp.push(path.basename(backupPath));
           }
+
           await fsp.copyFile(file.path, targetPath);
           uploaded.push(name);
         }
       } finally {
-        await Promise.allSettled(tempPaths.map((p) => fsp.unlink(p).catch(() => {})));
+        await Promise.allSettled(
+          tempPaths.map((p) => fsp.unlink(p).catch(() => {}))
+        );
       }
     }
 
+    // 업데이트
     await mysqlPool.query(
       `UPDATE model_units SET
-        model_name = ?, model_code = ?, status = ?, auto_learn = ?, auto_control = ?,
+        model_name = ?, model_code = ?, table_name = ?, status = ?, auto_learn = ?, auto_control = ?,
         learning_cycle = ?, resample_size = ?, interpolate = ?, fill_method = ?, model_output_path = ?,
         control_tag_id = ?, min_allowed = ?, max_allowed = ?, change_range = ?, auto_apply = ?, memo = ?,
         model_generated_at = NOW()
@@ -1042,6 +2072,7 @@ app.post(
       [
         m.model_name,
         m.model_code,
+        m.table_name,
         m.status,
         m.auto_learn,
         m.auto_control,
@@ -1059,14 +2090,95 @@ app.post(
         id,
       ]
     );
-    const [rows] = await mysqlPool.query("SELECT * FROM model_units WHERE id = ?", [id]);
+
+    // 최신 데이터 조회
+    const [updatedRows] = await mysqlPool.query(
+      "SELECT * FROM model_units WHERE id = ?",
+      [id]
+    );
+
     res.json({
-      model: rowToModelUnit(rows[0]),
+      model: rowToModelUnit(updatedRows[0]),
       uploaded,
       backed_up: backedUp,
       target_dir: MODEL_FILE_TARGET_DIR,
       backup_dir: MODEL_FILE_BACKUP_DIR,
     });
+  })
+);
+
+app.post(
+  "/api/model-units/:id/manual-train",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const [exist] = await mysqlPool.query("SELECT id FROM model_units WHERE id = ?", [id]);
+    if (!exist[0]) return res.status(404).json({ error: "모델을 찾을 수 없습니다." });
+
+    const m = normalizeModelBody(req.body, { partial: false });
+    if (!m.model_name || !m.model_code || !m.table_name) {
+      return res.status(400).json({ error: "모델명, 모델ID, 테이블명은 필수입니다." });
+    }
+
+    await mysqlPool.query(
+      `UPDATE model_units SET
+        model_name = ?, model_code = ?, table_name = ?, status = ?, auto_learn = ?, auto_control = ?,
+        learning_cycle = ?, resample_size = ?, interpolate = ?, fill_method = ?, model_output_path = ?,
+        control_tag_id = ?, min_allowed = ?, max_allowed = ?, change_range = ?, auto_apply = ?, memo = ?
+      WHERE id = ?`,
+      [
+        m.model_name,
+        m.model_code,
+        m.table_name,
+        m.status,
+        m.auto_learn,
+        m.auto_control,
+        m.learning_cycle,
+        m.resample_size,
+        m.interpolate,
+        m.fill_method,
+        m.model_output_path,
+        m.control_tag_id || m.model_code,
+        m.min_allowed,
+        m.max_allowed,
+        m.change_range,
+        m.auto_apply,
+        m.memo,
+        id,
+      ]
+    );
+
+    const result = await executeModelTraining(id);
+    if (!result.training_run.ok) {
+      const detail =
+        result.training_run.stderr_tail || result.training_run.stdout_tail || "학습 로그가 없습니다.";
+      return res.status(500).json({
+        error: `수동 학습에 실패했습니다. ${detail}`,
+        ...result,
+      });
+    }
+    res.json(result);
+  })
+);
+
+/** @deprecated refresh-ai → manual-train 과 동일 (하위 호환) */
+app.post(
+  "/api/model-units/:id/refresh-ai",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const [exist] = await mysqlPool.query("SELECT id FROM model_units WHERE id = ?", [id]);
+    if (!exist[0]) return res.status(404).json({ error: "모델을 찾을 수 없습니다." });
+    const result = await executeModelTraining(id);
+    if (!result.training_run.ok) {
+      const detail =
+        result.training_run.stderr_tail || result.training_run.stdout_tail || "학습 로그가 없습니다.";
+      return res.status(500).json({
+        error: `학습 실행에 실패했습니다. ${detail}`,
+        ...result,
+      });
+    }
+    res.json(result);
   })
 );
 
@@ -1103,8 +2215,86 @@ async function main() {
     process.exit(1);
   }
 
+  // WebSocket 서버 설정
+  const WS_PORT = 3001; // 명시적으로 포트 3001 설정
+  console.log(`[DEBUG] WebSocket 서버 시작 시도: 포트 ${WS_PORT}`);
+  const wss = new WebSocket.Server({ port: WS_PORT });
+  console.log(`[DEBUG] WebSocket 서버 시작 성공: 포트 ${WS_PORT}`);
+  
+  // 학습 로그를 전송할 클라이언트 관리
+  const trainingClients = new Map(); // modelId -> Set of WebSocket connections
+  
+  wss.on('connection', (ws, req) => {
+    console.log(`[WebSocket] 새 연결 요청: ${req.url}`);
+    const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+    const modelId = url.searchParams.get('modelId');
+    
+    console.log(`[WebSocket] 파싱된 modelId: ${modelId}`);
+    
+    if (modelId) {
+      // 해당 모델의 학습 로그를 구독
+      if (!trainingClients.has(modelId)) {
+        trainingClients.set(modelId, new Set());
+      }
+      trainingClients.get(modelId).add(ws);
+      
+      console.log(`[WebSocket] 모델 ${modelId}의 학습 로그 구독 시작 (클라이언트 수: ${trainingClients.get(modelId).size})`);
+      
+      ws.on('close', () => {
+        trainingClients.get(modelId)?.delete(ws);
+        if (trainingClients.get(modelId)?.size === 0) {
+          trainingClients.delete(modelId);
+        }
+        console.log(`[WebSocket] 모델 ${modelId}의 학습 로그 구독 종료`);
+      });
+      
+      ws.on('error', (error) => {
+        console.error(`[WebSocket] 에러:`, error);
+        trainingClients.get(modelId)?.delete(ws);
+      });
+    }
+  });
+  
+  // 학습 로그 전송 함수
+  function broadcastTrainingLog(modelId, logData) {
+    console.log(`[DEBUG] broadcastTrainingLog 호출: modelId=${modelId}, logType=${logData.type}`);
+    const clients = trainingClients.get(String(modelId));
+    console.log(`[DEBUG] 연결된 클라이언트 수: ${clients ? clients.size : 0}`);
+    
+    if (clients) {
+      const message = JSON.stringify({
+        type: 'training_log',
+        modelId: modelId,
+        timestamp: new Date().toISOString(),
+        data: logData
+      });
+      
+      console.log(`[DEBUG] 전송할 메시지: ${message}`);
+      
+      let sentCount = 0;
+      clients.forEach(ws => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(message);
+          sentCount++;
+          console.log(`[DEBUG] 메시지 전송 완료 (클라이언트)`);
+        } else {
+          console.log(`[DEBUG] 클라이언트 연결 상태가 OPEN이 아님: ${ws.readyState}`);
+        }
+      });
+      console.log(`[DEBUG] 총 ${sentCount}개 클라이언트에게 메시지 전송 완료`);
+    } else {
+      console.log(`[DEBUG] modelId ${modelId}에 대한 연결된 클라이언트가 없음`);
+    }
+  }
+  
+  // 전역 함수로 등록하여 다른 함수에서 사용할 수 있도록 함
+  global.broadcastTrainingLog = broadcastTrainingLog;
+
+  startAutoLearnScheduler();
+
   app.listen(PORT, () => {
     console.log(`회원 CMS: http://localhost:${PORT}`);
+    console.log(`WebSocket 서버: ws://localhost:${WS_PORT}`);
   });
 }
 

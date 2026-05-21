@@ -4,7 +4,7 @@ PLC Modbus 수집 — agent-flow 수집부 CMS(PostgreSQL)와 연동
 수집부에서 등록한 device_ip, device_port, 태그(tag_id, 데이터타입, 주소, 배율)를 DB에서 읽어 수집합니다.
 
 환경 변수 (server.js 의 PG 설정과 동일하게 맞추면 됨):
-  PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE  — 설정·태그 조회용 DB (기본 agent_flow_collect)
+  PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE  — 설정·태그 조회용 DB (기본 host=210.109.80.110, db=agent_flow_collect)
 
 수집부 단위 선택 (하나만 설정):
   COLLECTOR_UNIT_ID       — collection_units.id
@@ -12,7 +12,7 @@ PLC Modbus 수집 — agent-flow 수집부 CMS(PostgreSQL)와 연동
   COLLECTOR_PROCESS_NAME  — 공정명 (기본: 에어크리너)
 
 측정값 저장 DB (기존 factory_db 등):
-  DB_CONFIG — psycopg2 연결 문자열 (기본: host=localhost dbname=factory_db user=postgres password=postgres port=5432)
+  DB_CONFIG — psycopg2 연결 문자열 (기본: host=210.109.80.110 dbname=factory_db user=postgres password=postgres port=5433)
   DB_TABLE  — INSERT 대상 테이블명
 
 경로 (CSV/로그):
@@ -57,8 +57,8 @@ pending_db_rows = []
 
 def _pg_conninfo():
     return (
-        f"host={os.environ.get('PGHOST', '127.0.0.1')} "
-        f"port={os.environ.get('PGPORT', '5432')} "
+        f"host={os.environ.get('PGHOST', '210.109.80.110')} "
+        f"port={os.environ.get('PGPORT', '5433')} "
         f"dbname={os.environ.get('PGDATABASE', 'agent_flow_collect')} "
         f"user={os.environ.get('PGUSER', 'deiludenseu')} "
         f"password={os.environ.get('PGPASSWORD', '')}"
@@ -68,7 +68,7 @@ def _pg_conninfo():
 def _data_conninfo():
     return os.environ.get(
         "DB_CONFIG",
-        "host=localhost dbname=factory_db user=postgres password=postgres port=5432",
+        "host=210.109.80.110 dbname=factory_db user=postgres password=postgres port=5433",
     )
 
 
