@@ -2,7 +2,7 @@
 /**
  * 자동학습 스케줄러 테스트
  *
- * CMS에서 auto_learn=ON, 학습 주기 예: "7" (7일)
+ * CMS에서 auto_learn=ON, 학습 주기 예: "7분" 또는 "7" (7일)
  * 실행: npm run test:auto-learn
  */
 require("dotenv").config();
@@ -61,14 +61,14 @@ async function main() {
     console.log(`  - #${m.id} ${m.model_name}: ${m.runs_at} · ${due}`);
   }
   if (!status.models?.length) {
-    console.warn("\nauto_learn=ON 인 모델이 없습니다. CMS에서 자동학습 ON + 학습 주기(예: 7일) 후 적용하세요.");
+    console.warn("\nauto_learn=ON 인 모델이 없습니다. CMS에서 자동학습 ON + 학습 주기(예: 7분) 후 적용하세요.");
   }
   console.log("");
 
   console.log("[3/3] 스케줄러 즉시 실행 (POST scheduler/tick, force)");
   const tick = await request("/api/model-units/scheduler/tick", {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ wait: true }),
   });
   console.log(JSON.stringify(tick, null, 2));
 

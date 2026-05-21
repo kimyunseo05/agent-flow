@@ -170,7 +170,8 @@ function initModelDetailView() {
       return;
     }
     
-    const wsUrl = `ws://localhost:3001?modelId=${id}`;
+    const wsHost = window.location.hostname || "localhost";
+    const wsUrl = `ws://${wsHost}:3001?modelId=${id}`;
     console.log(`[DEBUG] WebSocket 연결 시도: ${wsUrl}`);
     
     try {
@@ -249,9 +250,12 @@ function initModelDetailView() {
       
       if (logData.type === 'start') {
         statusEl.classList.add('status-indicator--running');
-        statusEl.textContent = '학습 중';
+        statusEl.textContent = logData.source === 'auto_learn' ? '자동학습 중' : '학습 중';
         if (progressEl) progressEl.hidden = false;
-        if (progressText) progressText.textContent = 'GRU 모델 학습 시작...';
+        if (progressText) {
+          progressText.textContent =
+            logData.source === 'auto_learn' ? '자동학습 GRU 시작...' : 'GRU 모델 학습 시작...';
+        }
         if (progressFill) progressFill.style.width = '10%';
       } else if (logData.type === 'complete') {
         statusEl.classList.add(logData.success ? 'status-indicator--success' : 'status-indicator--error');
@@ -314,21 +318,45 @@ function initModelDetailView() {
     return;
   }
 
-  fetchJson(`${MODEL_API}/scheduler/status`)
-    .then((st) => {
-      const tickBtn = document.getElementById("btnMdlSchedulerTick");
-      if (tickBtn) tickBtn.hidden = false;
-      const me = (st.models || []).find((m) => String(m.id) === String(id));
-      if (!me) return;
-      const remain = me.due_now
-        ? "다음 00:00:00 실행 가능"
-        : `대기 (${me.reason}${me.remaining_days != null ? `, 약 ${me.remaining_days}일` : ""})`;
-      setModelMessage(
-        `[자동학습] ${me.cycle_days ?? me.cycle_value}일마다 매일 00:00:00 · ${remain}`,
-        "ok"
-      );
-    })
-    .catch(() => {});
+  connectTrainingWebSocket();
+
+  function refreshAutoLearnStatus() {
+    return fetchJson(`${MODEL_API}/scheduler/status`)
+      .then((st) => {
+        const tickBtn = document.getElementById("btnMdlSchedulerTick");
+        if (tickBtn) tickBtn.hidden = false;
+        const me = (st.models || []).find((m) => String(m.id) === String(id));
+        if (!me) return;
+        if (me.training_in_progress) {
+          const logsSection = document.getElementById("trainingLogsSection");
+          const logsContent = document.getElementById("trainingLogsContent");
+          const statusEl = document.getElementById("trainingStatus");
+          if (logsSection) logsSection.hidden = false;
+          if (logsContent) logsContent.hidden = false;
+          if (statusEl) {
+            statusEl.className = "status-indicator status-indicator--running";
+            statusEl.textContent = "자동학습 중";
+          }
+          setModelMessage("[자동학습] GRU 학습 진행 중 — 아래 로그 패널에서 확인", "ok");
+          return;
+        }
+        if (me.cycle_unit === "minutes") {
+          const remain = me.due_now
+            ? "실행 예정/진행 중 (스케줄러가 곧 시작)"
+            : `약 ${me.remaining_minutes ?? "?"}분 후 (${me.reason})`;
+          setModelMessage(`[자동학습] ${me.cycle_minutes}분마다 · ${remain}`, "ok");
+        } else {
+          const remain = me.due_now
+            ? "다음 00:00:00에 실행 (자정에만 동작)"
+            : `대기 (${me.reason}${me.remaining_days != null ? `, 약 ${me.remaining_days}일` : ""})`;
+          setModelMessage(`[자동학습] ${me.cycle_days}일마다 매일 00:00:00 · ${remain}`, "ok");
+        }
+      })
+      .catch(() => {});
+  }
+
+  refreshAutoLearnStatus();
+  setInterval(refreshAutoLearnStatus, 30_000);
 
   document.getElementById("btnMdlSchedulerTick")?.addEventListener("click", async () => {
     setModelMessage("스케줄러 테스트 실행 중…", "ok");
@@ -360,12 +388,7 @@ function initModelDetailView() {
       console.log(`[DEBUG] 모델 데이터 로드 완료:`, row);
       applyRowToForm(row);
       setUnitMeta(row);
-      
-      // 데이터 로드 후 WebSocket 연결 시작
-      console.log(`[DEBUG] WebSocket 연결 시도 시작`);
-      setTimeout(() => {
-        connectTrainingWebSocket();
-      }, 500);
+      connectTrainingWebSocket();
     })
     .catch((err) => {
       console.error(`[DEBUG] 모델 데이터 로드 실패:`, err);
@@ -512,7 +535,10 @@ function initModelDetailView() {
       applyRowToForm(saved);
       setUnitMeta(saved);
       if (schedule) {
-        const scheduleText = `자동 학습: ${schedule.cycle_days}일 주기, 매일 ${schedule.runs_at} (적용 직후 바로 학습 안 함)`;
+        const scheduleText =
+          schedule.unit === "minutes"
+            ? `자동 학습: ${schedule.cycle_minutes}분마다 (적용 후 ${schedule.cycle_minutes}분 뒤 첫 실행)`
+            : `자동 학습: ${schedule.cycle_days}일 주기, 매일 ${schedule.runs_at} (적용 직후 바로 학습 안 함)`;
         const anchorNote = result?.auto_learn_anchor_reset
           ? " 지금부터 주기만큼 대기 후 첫 자동학습이 실행됩니다."
           : "";

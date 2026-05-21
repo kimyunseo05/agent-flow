@@ -361,23 +361,44 @@ function toLookbackDays(learningCycle) {
 }
 
 /**
- * 학습 주기(일). 예: "7", "7일", "7d" → 7일마다 매일 00:00:00 자동학습
+ * 학습 주기 파싱
+ * - 분: "7분", "7m", "30min" → N분마다 (anchor 기준)
+ * - 일: "7", "7일", "7d" → N일마다 매일 00:00:00
  */
-function parseLearningCycleDays(learningCycle) {
+function parseLearningCycle(learningCycle) {
   const raw = String(learningCycle ?? "").trim();
-  if (!raw) return 1;
-  const matched = raw.match(/(\d+)/);
-  if (!matched) return 1;
-  const parsed = Number.parseInt(matched[1], 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  if (!raw) return { unit: "days", value: 1 };
+
+  const minMatch = raw.match(/(\d+)\s*(m|min|분)/i);
+  if (minMatch) {
+    const n = Number.parseInt(minMatch[1], 10);
+    if (Number.isFinite(n) && n > 0) return { unit: "minutes", value: n };
+  }
+
+  const dayMatch = raw.match(/(\d+)\s*(d|day|일)/i);
+  if (dayMatch) {
+    const n = Number.parseInt(dayMatch[1], 10);
+    if (Number.isFinite(n) && n > 0) return { unit: "days", value: n };
+  }
+
+  const direct = Number.parseInt(raw, 10);
+  if (Number.isFinite(direct) && direct > 0) return { unit: "days", value: direct };
+
+  return { unit: "days", value: 1 };
+}
+
+function parseLearningCycleDays(learningCycle) {
+  const c = parseLearningCycle(learningCycle);
+  return c.value;
 }
 
 function getAutoLearnAnchorAt(row) {
   return row.auto_learn_anchor_at || null;
 }
 
-function learningCycleDaysToMs(days) {
-  return days * 86_400_000;
+function learningCycleToMs(cycle) {
+  if (cycle.unit === "minutes") return cycle.value * 60_000;
+  return cycle.value * 86_400_000;
 }
 
 function isMidnightZeroWindow() {
@@ -412,39 +433,72 @@ function remainingMsUntilCycle(lastAt, cycleMs) {
   return Math.max(0, cycleMs - elapsed);
 }
 
-/** auto_learn=ON 모델 1건 — 지금 학습해야 하는지 (일 주기, 매일 00:00:00) */
+/** auto_learn=ON 모델 1건 — 지금 학습해야 하는지 */
 function shouldRunAutoLearnForModel(row, opts = {}) {
   const force = opts.force === true;
-  const cycleDays = parseLearningCycleDays(row.learning_cycle);
-  const cycleMs = learningCycleDaysToMs(cycleDays);
+  const cycle = parseLearningCycle(row.learning_cycle);
+  const cycleMs = learningCycleToMs(cycle);
 
   if (force) {
-    return { due: true, reason: "forced", cycle_days: cycleDays, cycle_ms: cycleMs, remaining_ms: 0 };
+    return { due: true, reason: "forced", cycle, cycle_ms: cycleMs, remaining_ms: 0 };
+  }
+
+  const anchorAt = getAutoLearnAnchorAt(row);
+  if (!anchorAt) {
+    const waiting = {
+      due: false,
+      reason: "waiting_anchor",
+      cycle,
+      cycle_ms: cycleMs,
+      remaining_ms: 0,
+    };
+    if (cycle.unit === "minutes") {
+      waiting.cycle_minutes = cycle.value;
+      waiting.remaining_minutes = cycle.value;
+      waiting.runs_at = `${cycle.value}분마다`;
+    } else {
+      waiting.cycle_days = cycle.value;
+      waiting.remaining_days = cycle.value;
+      waiting.runs_at = "00:00:00";
+    }
+    return waiting;
+  }
+
+  if (cycle.unit === "minutes") {
+    if (elapsedMsSince(anchorAt) >= cycleMs) {
+      return {
+        due: true,
+        reason: "interval_elapsed",
+        cycle,
+        cycle_ms: cycleMs,
+        cycle_minutes: cycle.value,
+        runs_at: `${cycle.value}분마다`,
+        remaining_ms: 0,
+      };
+    }
+    const remaining = remainingMsUntilCycle(anchorAt, cycleMs);
+    return {
+      due: false,
+      reason: "cycle_not_elapsed",
+      cycle,
+      cycle_ms: cycleMs,
+      cycle_minutes: cycle.value,
+      runs_at: `${cycle.value}분마다`,
+      remaining_ms: remaining,
+      remaining_minutes: Math.ceil(remaining / 60_000),
+    };
   }
 
   if (!isMidnightZeroWindow()) {
     return {
       due: false,
       reason: "not_midnight",
-      cycle_days: cycleDays,
+      cycle,
       cycle_ms: cycleMs,
+      cycle_days: cycle.value,
       runs_at: "00:00:00",
-      remaining_ms: remainingMsUntilCycle(getAutoLearnAnchorAt(row), cycleMs),
-      remaining_days: Math.ceil(
-        remainingMsUntilCycle(getAutoLearnAnchorAt(row), cycleMs) / 86_400_000
-      ),
-    };
-  }
-
-  const anchorAt = getAutoLearnAnchorAt(row);
-  if (!anchorAt) {
-    return {
-      due: false,
-      reason: "waiting_anchor",
-      cycle_days: cycleDays,
-      cycle_ms: cycleMs,
-      runs_at: "00:00:00",
-      remaining_days: cycleDays,
+      remaining_ms: remainingMsUntilCycle(anchorAt, cycleMs),
+      remaining_days: Math.ceil(remainingMsUntilCycle(anchorAt, cycleMs) / 86_400_000),
     };
   }
 
@@ -452,14 +506,15 @@ function shouldRunAutoLearnForModel(row, opts = {}) {
   const todayKey = getDateKey(now);
   const lastTrainKey = row.last_auto_learn_at ? getDateKey(row.last_auto_learn_at) : null;
   if (lastTrainKey === todayKey) {
-    return { due: false, reason: "already_ran_today", cycle_days: cycleDays, cycle_ms: cycleMs };
+    return { due: false, reason: "already_ran_today", cycle, cycle_ms: cycleMs, cycle_days: cycle.value };
   }
   if (elapsedMsSince(anchorAt) >= cycleMs) {
     return {
       due: true,
       reason: "midnight_cycle",
-      cycle_days: cycleDays,
+      cycle,
       cycle_ms: cycleMs,
+      cycle_days: cycle.value,
       runs_at: "00:00:00",
       remaining_ms: 0,
     };
@@ -468,8 +523,10 @@ function shouldRunAutoLearnForModel(row, opts = {}) {
   return {
     due: false,
     reason: "cycle_not_elapsed",
-    cycle_days: cycleDays,
+    cycle,
     cycle_ms: cycleMs,
+    cycle_days: cycle.value,
+    runs_at: "00:00:00",
     remaining_ms: remaining,
     remaining_days: Math.ceil(remaining / 86_400_000),
   };
@@ -477,10 +534,20 @@ function shouldRunAutoLearnForModel(row, opts = {}) {
 
 function buildAutoLearnScheduleInfo(model) {
   if (!model || model.auto_learn !== "ON") return null;
-  const cycleDays = parseLearningCycleDays(model.learning_cycle);
+  const cycle = parseLearningCycle(model.learning_cycle);
+  if (cycle.unit === "minutes") {
+    return {
+      unit: "minutes",
+      cycle_minutes: cycle.value,
+      runs_at: `${cycle.value}분마다`,
+      pipeline: "manual-train",
+      last_auto_learn_at: model.last_auto_learn_at,
+      auto_learn_anchor_at: model.auto_learn_anchor_at,
+    };
+  }
   return {
     unit: "days",
-    cycle_days: cycleDays,
+    cycle_days: cycle.value,
     runs_at: "00:00:00",
     pipeline: "manual-train",
     last_auto_learn_at: model.last_auto_learn_at,
@@ -488,7 +555,14 @@ function buildAutoLearnScheduleInfo(model) {
   };
 }
 
-const autoLearnRunningIds = new Set();
+/** 모델별 학습 중복 실행 방지 (수동·자동 공통) */
+const modelTrainingLocks = new Set();
+const TRAINING_LOG_MAX_CHARS = 32_000;
+
+function appendTrainingLogBuffer(buf, chunk) {
+  const next = buf + String(chunk);
+  return next.length > TRAINING_LOG_MAX_CHARS ? next.slice(-TRAINING_LOG_MAX_CHARS) : next;
+}
 
 const MODEL_FILE_BY_TABLE = {
   air_cleaner_table: "air_cleaner_gru_forecast.pth",
@@ -676,7 +750,17 @@ async function runAiPredictScript(model) {
   });
 }
 
-async function runGruTrainingScript(model) {
+function emitTrainingLog(modelId, liveLog, payload) {
+  if (!liveLog || !global.broadcastTrainingLog) return;
+  global.broadcastTrainingLog(String(modelId), {
+    timestamp: new Date().toISOString(),
+    ...payload,
+  });
+}
+
+async function runGruTrainingScript(model, opts = {}) {
+  const liveLog = opts.liveLog !== false;
+  const logSource = opts.logSource === "auto_learn" ? "auto_learn" : "manual";
   const tableName = String(model.table_name ?? "").trim();
   const dataDays = toLookbackDays(model.learning_cycle);
   const resampleInterval = String(model.resample_size ?? "").trim() || "1s";
@@ -702,22 +786,18 @@ async function runGruTrainingScript(model) {
     trainingScript = "train_air_cleaner_gru.py"; // fallback
   }
   
-  // 학습 시작 로그 전송
-  console.log(`[DEBUG] 학습 로그 전송 시도: modelId=${modelId}, script=${trainingScript}`);
-  if (global.broadcastTrainingLog) {
-    console.log(`[DEBUG] broadcastTrainingLog 함수 호출됨`);
-    global.broadcastTrainingLog(modelId, {
-      type: 'start',
-      message: `GRU 모델 학습 시작: ${trainingScript}`,
-      timestamp: new Date().toISOString(),
-      script: trainingScript,
-      dataDays: dataDays,
-      resampleInterval: resampleInterval
-    });
-    console.log(`[DEBUG] 학습 시작 로그 전송 완료`);
-  } else {
-    console.log(`[DEBUG] broadcastTrainingLog 함수를 찾을 수 없음`);
-  }
+  const startMsg =
+    logSource === "auto_learn"
+      ? `[자동학습] GRU 모델 학습 시작: ${trainingScript}`
+      : `GRU 모델 학습 시작: ${trainingScript}`;
+  emitTrainingLog(modelId, liveLog, {
+    type: "start",
+    message: startMsg,
+    script: trainingScript,
+    dataDays: dataDays,
+    resampleInterval: resampleInterval,
+    source: logSource,
+  });
   const dbEnv = {
     DB_HOST: AUTO_CONTROL_DB_HOST,
     DB_PORT: String(AUTO_CONTROL_DB_PORT || ""),
@@ -750,11 +830,14 @@ async function runGruTrainingScript(model) {
         )} && ${shellEscapeSingle(AUTO_CONTROL_REMOTE_PYTHON_BIN)} training/${trainingScript}`;
     }
     
+    const lockPath = `/tmp/agent-flow-train-${modelId}.lock`;
+    const inner = [`cd ${shellEscapeSingle(AUTO_CONTROL_REMOTE_WORKDIR)}`, envExports, runCommand]
+      .filter(Boolean)
+      .join(" && ");
     const command = [
-      `cd ${shellEscapeSingle(AUTO_CONTROL_REMOTE_WORKDIR)}`,
-      envExports,
-      runCommand,
-    ].filter(Boolean).join(" && ");
+      `find ${shellEscapeSingle(lockPath)} -mmin +180 -delete 2>/dev/null || true`,
+      `flock -n ${shellEscapeSingle(lockPath)} bash -lc ${shellEscapeSingle(inner)}`,
+    ].join(" && ");
 
     return await new Promise((resolve, reject) => {
       const conn = new SshClient();
@@ -765,12 +848,23 @@ async function runGruTrainingScript(model) {
           conn.exec(command, (err, stream) => {
             if (err) return reject(err);
             stream.on("data", (d) => {
-              stdout += String(d);
+              const output = String(d);
+              stdout = appendTrainingLogBuffer(stdout, output);
+              emitTrainingLog(modelId, liveLog, { type: "stdout", message: output, source: logSource });
             });
             stream.stderr.on("data", (d) => {
-              stderr += String(d);
+              const output = String(d);
+              stderr = appendTrainingLogBuffer(stderr, output);
+              emitTrainingLog(modelId, liveLog, { type: "stderr", message: output, source: logSource });
             });
             stream.on("close", (code) => {
+              emitTrainingLog(modelId, liveLog, {
+                type: "complete",
+                message: `GRU 모델 학습 완료 (종료 코드: ${code})`,
+                exitCode: code,
+                success: code === 0,
+                source: logSource,
+              });
               conn.end();
               resolve({
                 ok: code === 0,
@@ -816,42 +910,23 @@ async function runGruTrainingScript(model) {
     let stderr = "";
     child.stdout.on("data", (chunk) => {
       const output = String(chunk);
-      stdout += output;
-      
-      // 실시간으로 학습 로그 전송
-      if (global.broadcastTrainingLog) {
-        global.broadcastTrainingLog(modelId, {
-          type: 'stdout',
-          message: output,
-          timestamp: new Date().toISOString()
-        });
-      }
+      stdout = appendTrainingLogBuffer(stdout, output);
+      emitTrainingLog(modelId, liveLog, { type: "stdout", message: output, source: logSource });
     });
     child.stderr.on("data", (chunk) => {
       const output = String(chunk);
-      stderr += output;
-      
-      // 실시간으로 학습 로그 전송
-      if (global.broadcastTrainingLog) {
-        global.broadcastTrainingLog(modelId, {
-          type: 'stderr',
-          message: output,
-          timestamp: new Date().toISOString()
-        });
-      }
+      stderr = appendTrainingLogBuffer(stderr, output);
+      emitTrainingLog(modelId, liveLog, { type: "stderr", message: output, source: logSource });
     });
     child.on("error", reject);
     child.on("close", (code) => {
-      // 학습 완료 로그 전송
-      if (global.broadcastTrainingLog) {
-        global.broadcastTrainingLog(modelId, {
-          type: 'complete',
-          message: `GRU 모델 학습 완료 (종료 코드: ${code})`,
-          timestamp: new Date().toISOString(),
-          exitCode: code,
-          success: code === 0
-        });
-      }
+      emitTrainingLog(modelId, liveLog, {
+        type: "complete",
+        message: `GRU 모델 학습 완료 (종료 코드: ${code})`,
+        exitCode: code,
+        success: code === 0,
+        source: logSource,
+      });
       
       resolve({
         ok: code === 0,
@@ -869,49 +944,93 @@ async function runGruTrainingScript(model) {
 }
 
 /** 수동 학습 버튼과 동일: runGruTrainingScript → DB 갱신 */
-async function executeModelTraining(modelId) {
+async function executeModelTraining(modelId, opts = {}) {
   const id = Number(modelId);
-  const [rows] = await mysqlPool.query("SELECT * FROM model_units WHERE id = ?", [id]);
-  if (!rows[0]) {
-    const err = new Error("모델을 찾을 수 없습니다.");
-    err.status = 404;
+  if (modelTrainingLocks.has(id)) {
+    const err = new Error(`모델 ${id} 학습이 이미 진행 중입니다.`);
+    err.code = "TRAINING_IN_PROGRESS";
     throw err;
   }
-  const model = rowToModelUnit(rows[0]);
-  const trainingRun = await runGruTrainingScript(model);
-  if (trainingRun.ok) {
-    await mysqlPool.query(
-      `UPDATE model_units SET
-        model_generated_at = NOW(),
-        last_auto_learn_at = NOW(),
-        auto_learn_anchor_at = NOW()
-      WHERE id = ?`,
-      [id]
-    );
+  modelTrainingLocks.add(id);
+  try {
+    const [rows] = await mysqlPool.query("SELECT * FROM model_units WHERE id = ?", [id]);
+    if (!rows[0]) {
+      const err = new Error("모델을 찾을 수 없습니다.");
+      err.status = 404;
+      throw err;
+    }
+    const model = rowToModelUnit(rows[0]);
+    const trainingRun = await runGruTrainingScript(model, {
+      liveLog: opts.liveLog !== false,
+      logSource: opts.logSource,
+    });
+    if (trainingRun.ok) {
+      await mysqlPool.query(
+        `UPDATE model_units SET
+          model_generated_at = NOW(),
+          last_auto_learn_at = NOW(),
+          auto_learn_anchor_at = NOW()
+        WHERE id = ?`,
+        [id]
+      );
+    }
+    const [updated] = await mysqlPool.query("SELECT * FROM model_units WHERE id = ?", [id]);
+    return { model: rowToModelUnit(updated[0]), training_run: trainingRun };
+  } finally {
+    modelTrainingLocks.delete(id);
   }
-  const [updated] = await mysqlPool.query("SELECT * FROM model_units WHERE id = ?", [id]);
-  return { model: rowToModelUnit(updated[0]), training_run: trainingRun };
+}
+
+/** 자동학습: due 시 백그라운드 실행 (스케줄러 tick이 학습 완료까지 막히지 않음) */
+function queueAutoLearnTraining(modelId, meta = {}) {
+  const id = Number(modelId);
+  if (modelTrainingLocks.has(id)) return false;
+
+  const label = meta.label || `모델 ${id}`;
+  console.log(`[자동학습] ${label} 학습 시작 (백그라운드)`);
+
+  void executeModelTraining(id, { liveLog: true, logSource: "auto_learn" })
+    .then((result) => {
+      const run = result.training_run || {};
+      if (run.ok) {
+        console.log(`[자동학습] ${label} 학습 완료 (code=${run.exit_code})`);
+      } else {
+        console.error(
+          `[자동학습] ${label} 학습 실패 (code=${run.exit_code}):`,
+          run.stderr_tail || run.stdout_tail || ""
+        );
+      }
+    })
+    .catch((e) => {
+      if (e.code === "TRAINING_IN_PROGRESS") return;
+      console.error(`[자동학습] ${label} 오류:`, e.message || e);
+    });
+
+  return true;
 }
 
 async function tickAutoLearnScheduler(opts = {}) {
   const force = opts.force === true;
+  const wait = opts.wait === true || force;
   const [rows] = await mysqlPool.query("SELECT * FROM model_units WHERE auto_learn = 'ON'");
   const ran = [];
   const checked_at = new Date().toISOString();
 
   for (const row of rows) {
     const id = row.id;
-    if (autoLearnRunningIds.has(id)) {
-      ran.push({ id, skipped: true, reason: "already_running" });
+    const schedule = shouldRunAutoLearnForModel(row, { force });
+
+    if (modelTrainingLocks.has(id)) {
+      ran.push({ id, skipped: true, reason: "already_running", due: schedule.due });
       continue;
     }
 
-    const schedule = shouldRunAutoLearnForModel(row, { force });
     if (!schedule.due) {
       ran.push({
         id,
         skipped: true,
         reason: schedule.reason,
+        remaining_minutes: schedule.remaining_minutes,
         remaining_days: schedule.remaining_days,
         last_auto_learn_at: formatModelDate(row.last_auto_learn_at),
         learning_cycle: row.learning_cycle,
@@ -919,34 +1038,46 @@ async function tickAutoLearnScheduler(opts = {}) {
       continue;
     }
 
-    autoLearnRunningIds.add(id);
-    try {
-      const cycleDays = schedule.cycle_days ?? parseLearningCycleDays(row.learning_cycle);
-      console.log(
-        `[자동학습] 모델 ${id} 수동학습 파이프라인 실행 (${cycleDays}일, 00:00:00, ${schedule.reason})`
-      );
-      const { training_run: trainingRun } = await executeModelTraining(id);
-      ran.push({
-        id,
-        ok: trainingRun.ok,
-        exit_code: trainingRun.exit_code,
-        forced: force,
-        reason: schedule.reason,
-      });
-      if (!trainingRun.ok) {
-        console.error(
-          `[자동학습] 모델 ${id} 실패:`,
-          trainingRun.stderr_tail || trainingRun.stdout_tail || trainingRun.exit_code
-        );
+    const cycleLabel =
+      schedule.cycle?.unit === "minutes"
+        ? `${schedule.cycle_minutes ?? schedule.cycle?.value}분`
+        : `${schedule.cycle_days ?? schedule.cycle?.value}일`;
+    const whenLabel = schedule.cycle?.unit === "minutes" ? "주기경과" : "00:00:00";
+
+    if (wait) {
+      try {
+        console.log(`[자동학습] ${cycleLabel}, ${whenLabel}, ${schedule.reason} (동기 실행)`);
+        const { training_run: trainingRun } = await executeModelTraining(id, {
+          liveLog: true,
+          logSource: "auto_learn",
+        });
+        ran.push({
+          id,
+          ok: trainingRun.ok,
+          exit_code: trainingRun.exit_code,
+          forced: force,
+          reason: schedule.reason,
+        });
+      } catch (e) {
+        if (e.code === "TRAINING_IN_PROGRESS") {
+          ran.push({ id, skipped: true, reason: "already_running" });
+        } else {
+          ran.push({ id, ok: false, error: String(e.message || e) });
+        }
       }
-    } catch (e) {
-      console.error(`[자동학습] 모델 ${id} 오류:`, e);
-      ran.push({ id, ok: false, error: String(e.message || e) });
-    } finally {
-      autoLearnRunningIds.delete(id);
+      continue;
     }
+
+    const started = queueAutoLearnTraining(id, { label: `${id} (${cycleLabel}, ${whenLabel})` });
+    ran.push({
+      id,
+      started,
+      reason: schedule.reason,
+      cycle_label: cycleLabel,
+    });
   }
-  return { ran, forced: force, checked_at };
+
+  return { ran, forced: force, wait, checked_at };
 }
 
 function startAutoLearnScheduler() {
@@ -954,7 +1085,7 @@ function startAutoLearnScheduler() {
     tickAutoLearnScheduler().catch((e) => console.error("[자동학습 스케줄러]", e));
   }, AUTO_LEARN_SCHEDULER_TICK_MS);
   console.log(
-    `[자동학습] 스케줄러 시작 (${AUTO_LEARN_SCHEDULER_TICK_MS / 1000}s tick) — 일 주기, 매일 00:00:00, 수동학습 동일 파이프라인`
+    `[자동학습] 스케줄러 시작 (${AUTO_LEARN_SCHEDULER_TICK_MS / 1000}s tick) — 분: N분마다 / 일: 매일 00:00:00`
   );
 }
 
@@ -1713,22 +1844,25 @@ app.get(
       pipeline: "executeModelTraining (= 수동학습 runGruTrainingScript)",
       models: rows.map((r) => {
         const schedule = shouldRunAutoLearnForModel(r);
-        const cycleDays = parseLearningCycleDays(r.learning_cycle);
+        const cycle = parseLearningCycle(r.learning_cycle);
         return {
           id: r.id,
           model_name: r.model_name,
           learning_cycle: r.learning_cycle,
-          cycle_unit: "days",
-          cycle_days: cycleDays,
+          cycle_unit: cycle.unit,
+          cycle_minutes: cycle.unit === "minutes" ? cycle.value : null,
+          cycle_days: cycle.unit === "days" ? cycle.value : null,
           last_auto_learn_at: formatModelDate(r.last_auto_learn_at),
           auto_learn_anchor_at: formatModelDate(r.auto_learn_anchor_at),
           due_now: schedule.due,
+          training_in_progress: modelTrainingLocks.has(r.id),
           reason: schedule.reason,
-          runs_at: "00:00:00",
+          runs_at: cycle.unit === "minutes" ? `${cycle.value}분마다` : "00:00:00",
+          remaining_minutes: schedule.remaining_minutes,
           remaining_days: schedule.remaining_days,
         };
       }),
-      hint: "학습 주기=일(예: 7, 7일). auto_learn=ON, 매일 00:00:00. POST scheduler/tick = 즉시 1회",
+      hint: "분: 7분·7m / 일: 7·7일. auto_learn=ON. POST scheduler/tick = 즉시 1회",
     });
   })
 );
@@ -1737,7 +1871,8 @@ app.post(
   "/api/model-units/scheduler/tick",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const result = await tickAutoLearnScheduler({ force: true });
+    const wait = Boolean(req.body?.wait);
+    const result = await tickAutoLearnScheduler({ force: true, wait });
     res.json(result);
   })
 );
@@ -2148,16 +2283,23 @@ app.post(
       ]
     );
 
-    const result = await executeModelTraining(id);
-    if (!result.training_run.ok) {
-      const detail =
-        result.training_run.stderr_tail || result.training_run.stdout_tail || "학습 로그가 없습니다.";
-      return res.status(500).json({
-        error: `수동 학습에 실패했습니다. ${detail}`,
-        ...result,
-      });
+    try {
+      const result = await executeModelTraining(id, { liveLog: true });
+      if (!result.training_run.ok) {
+        const detail =
+          result.training_run.stderr_tail || result.training_run.stdout_tail || "학습 로그가 없습니다.";
+        return res.status(500).json({
+          error: `수동 학습에 실패했습니다. ${detail}`,
+          ...result,
+        });
+      }
+      return res.json(result);
+    } catch (e) {
+      if (e.code === "TRAINING_IN_PROGRESS") {
+        return res.status(409).json({ error: e.message });
+      }
+      throw e;
     }
-    res.json(result);
   })
 );
 
@@ -2169,7 +2311,7 @@ app.post(
     const id = Number(req.params.id);
     const [exist] = await mysqlPool.query("SELECT id FROM model_units WHERE id = ?", [id]);
     if (!exist[0]) return res.status(404).json({ error: "모델을 찾을 수 없습니다." });
-    const result = await executeModelTraining(id);
+    const result = await executeModelTraining(id, { liveLog: true });
     if (!result.training_run.ok) {
       const detail =
         result.training_run.stderr_tail || result.training_run.stdout_tail || "학습 로그가 없습니다.";
@@ -2287,7 +2429,10 @@ async function main() {
     }
   }
   
-  // 전역 함수로 등록하여 다른 함수에서 사용할 수 있도록 함
+  global.hasTrainingLogSubscribers = (modelId) => {
+    const clients = trainingClients.get(String(modelId));
+    return Boolean(clients && clients.size > 0);
+  };
   global.broadcastTrainingLog = broadcastTrainingLog;
 
   startAutoLearnScheduler();
