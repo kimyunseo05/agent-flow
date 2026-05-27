@@ -796,7 +796,7 @@ body {
 }
 
 .detail-list-search {
-  width: 100%;
+  width: 80%;
   max-width: 100%;
   padding: 0.5rem 0.65rem;
   border: 1px solid #ccc;

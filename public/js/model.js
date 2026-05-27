@@ -49,6 +49,7 @@ function renderModelRows(items) {
 
   for (const row of items) {
     const detailUrl = `/html/model/detail.html?id=${row.id}`;
+    const detailUrlForBtn = `/html/model/detail-list.html?id=${row.id}`;
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td><a class="link-like" href="${detailUrl}">${escapeHtml(row.model_name)}</a></td>
@@ -56,6 +57,7 @@ function renderModelRows(items) {
       <td><span class="status-pill ${statusClass(row.status)}">${escapeHtml(row.status)}</span></td>
       <td>${escapeHtml(row.auto_learn)}</td>
       <td class="actions">
+        <a class="btn btn-sm btn-primary-solid" href="${detailUrlForBtn}">목록 보기</a>
         <button type="button" class="btn btn-sm btn-danger-solid" data-model-del="${row.id}">삭제</button>
       </td>
     `;

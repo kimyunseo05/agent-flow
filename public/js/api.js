@@ -13,7 +13,10 @@ async function fetchJson(url, options = {}) {
     : null;
   if (!res.ok) {
     const msg = data?.error || res.statusText || "요청 실패";
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = res.status;
+    err.data = data;
+    throw err;
   }
   return data;
 }

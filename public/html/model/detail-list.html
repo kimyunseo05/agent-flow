@@ -6,7 +6,7 @@
     <title>공정 자동화 Ai 에이전트 솔루션 CMS</title>
     <link rel="stylesheet" href="/css/style.css" />
   </head>
-  <body class="dashboard-body" data-nav="collection">
+  <body class="dashboard-body" data-nav="model">
     <div class="app-shell">
       <aside class="sidebar" id="sidebarMount" aria-label="메인 메뉴"></aside>
 
@@ -21,7 +21,7 @@
         <main class="main-content">
           <div class="main-view main-view--paper detail-card">
             <p class="detail-back-wrap">
-              <a href="/html/collect/index.html" class="link-back">← 수집부 목록</a>
+              <a href="/html/model/index.html" class="link-back">← 모델부 목록</a>
             </p>
             <h1 class="view-heading">목록 보기</h1>
             <p class="detail-meta" id="unitMeta" hidden></p>
@@ -44,6 +44,28 @@
               />
             </div>
 
+            <div class="detail-section" style="margin-bottom: 1.25rem">
+              <div class="detail-section-header">
+                <h3>PLC 제어 설정</h3>
+              </div>
+              <div class="detail-section-content" style="display: grid; gap: 0.75rem">
+                <label class="detail-label">
+                  PLC IP
+                  <input type="text" id="plcIp" class="input-light" placeholder="예: 192.168.0.10" autocomplete="off" />
+                </label>
+                <label class="detail-label">
+                  PLC Port
+                  <input type="text" id="plcPort" class="input-light" placeholder="예: 502" autocomplete="off" />
+                </label>
+                <div class="detail-form-actions" style="margin-top: 0.25rem">
+                  <button type="button" class="btn btn-primary-solid btn-sm" id="btnPlcSave">적용</button>
+                  <button type="button" class="btn btn-primary-solid btn-sm" id="btnPlcWrite">
+                    PLC 제어 실행
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <div id="tagListMount" class="tag-list-mount tag-list-mount--stacked"></div>
 
             <div class="collection-footer">
@@ -55,7 +77,6 @@
             </div>
 
             <div class="detail-form-actions" style="margin-top: 1.5rem">
-              <!-- <a href="/html/collect/index.html" class="btn btn-outline-light">목록</a> -->
               <button type="button" class="btn btn-primary-solid btn-apply" id="btnTagAdd">추가</button>
             </div>
           </div>
@@ -122,11 +143,11 @@
 
     <script src="/js/api.js"></script>
     <script src="/js/layout.js"></script>
-    <script src="/js/collect-detail-list.js"></script>
+    <script src="/js/model-detail-list.js"></script>
     <script>
       document.addEventListener("DOMContentLoaded", () => {
         initDashboardPage(() => {
-          if (window.initCollectDetailListView) window.initCollectDetailListView();
+          if (window.initModelDetailListView) window.initModelDetailListView();
         }).catch(() => {});
       });
     </script>

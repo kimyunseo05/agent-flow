@@ -2,6 +2,7 @@ const COLLECTION_API = "/api/collection-units";
 
 const DEFAULT_TAG = () => ({
   tag_id: "",
+  description: "",
   dataType: "DWord",
   address: "",
   ratio: "1",
@@ -96,6 +97,7 @@ function readRowFromRowEl(rowEl) {
   }
   return {
     tag_id: rowEl.querySelector(".js-tag-id")?.value?.trim() ?? "",
+    description: rowEl.querySelector(".js-tag-description")?.value?.trim() ?? "",
     dataType,
     address,
     ratio: rowEl.querySelector(".js-tag-ratio")?.value?.trim() ?? "1",
@@ -139,6 +141,8 @@ async function persistTagsFromDom(unitId, { silent } = {}) {
 
 function applyTagRowValues(rowEl, tag) {
   rowEl.querySelector(".js-tag-id").value = tag.tag_id ?? "";
+  const descEl = rowEl.querySelector(".js-tag-description");
+  if (descEl) descEl.value = tag.description ?? "";
   const sel = rowEl.querySelector(".js-data-type");
   const dt = ["Boolean", "Word", "DWord"].includes(tag.dataType) ? tag.dataType : "DWord";
   sel.value = dt;
@@ -165,7 +169,7 @@ function applyTagRowValues(rowEl, tag) {
 function rowMatchesSearch(rowEl, q) {
   if (!q) return true;
   const d = readRowFromRowEl(rowEl);
-  const hay = `${d.tag_id} ${d.dataType} ${d.address} ${d.ratio}`.toLowerCase();
+  const hay = `${d.tag_id} ${d.description} ${d.dataType} ${d.address} ${d.ratio}`.toLowerCase();
   return hay.includes(q);
 }
 

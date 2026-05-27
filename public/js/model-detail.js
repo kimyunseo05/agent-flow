@@ -69,6 +69,9 @@ function readModelForm() {
     model_name: document.getElementById("mdlName")?.value.trim() ?? "",
     model_code: document.getElementById("mdlCode")?.value.trim() ?? "",
     table_name: document.getElementById("mdlTableName")?.value.trim() ?? "",
+    plc_ip: document.getElementById("mdlPlcIp")?.value.trim() ?? "",
+    plc_port: document.getElementById("mdlPlcPort")?.value.trim() ?? "",
+    plc_use_value: document.getElementById("mdlPlcUseValue")?.value.trim() ?? "",
     status: document.getElementById("mdlStatus")?.value ?? "정상",
     auto_learn: document.getElementById("mdlAutoLearn")?.value ?? "ON",
     auto_control: document.getElementById("mdlAutoControl")?.value ?? "ON",
@@ -96,6 +99,9 @@ function applyRowToForm(row) {
   set("mdlName", row.model_name);
   set("mdlCode", row.model_code);
   set("mdlTableName", row.table_name);
+  set("mdlPlcIp", row.plc_ip);
+  set("mdlPlcPort", row.plc_port);
+  set("mdlPlcUseValue", row.plc_use_value);
   set("mdlStatus", row.status === "비정상" ? "비정상" : "정상");
   set("mdlAutoLearn", row.auto_learn === "OFF" ? "OFF" : "ON");
   set("mdlAutoControl", row.auto_control === "OFF" ? "OFF" : "ON");

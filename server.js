@@ -14,6 +14,7 @@ const SftpClient = require("ssh2-sftp-client");
 const { Client: SshClient } = require("ssh2");
 const { spawn } = require("child_process");
 const WebSocket = require("ws");
+const { executePlcModbusWrite } = require("./lib/plc-modbus-write");
 
 /** 비밀번호를 UTF-8 문자열로 SHA-256 해시한 16진 문자열(소문자 64자) */
 function sha256PasswordHex(plain) {
@@ -157,6 +158,9 @@ CREATE TABLE IF NOT EXISTS model_units (
   model_name VARCHAR(255) NOT NULL,
   model_code VARCHAR(255) NOT NULL,
   table_name VARCHAR(255) NOT NULL DEFAULT '',
+  plc_ip VARCHAR(255) NOT NULL DEFAULT '',
+  plc_port VARCHAR(50) NOT NULL DEFAULT '',
+  plc_use_value VARCHAR(255) NOT NULL DEFAULT '',
   status VARCHAR(50) NOT NULL DEFAULT '정상',
   auto_learn VARCHAR(10) NOT NULL DEFAULT 'ON',
   auto_control VARCHAR(10) NOT NULL DEFAULT 'ON',
@@ -180,11 +184,51 @@ CREATE TABLE IF NOT EXISTS model_units (
   UNIQUE KEY uq_model_units_code (model_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`;
 
+const MODEL_UNIT_TAGS_DDL = `
+CREATE TABLE IF NOT EXISTS model_unit_tags (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  model_unit_id INT UNSIGNED NOT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  tag_id VARCHAR(255) NOT NULL,
+  description VARCHAR(500) NOT NULL DEFAULT '',
+  data_type VARCHAR(20) NOT NULL DEFAULT 'DWord',
+  address VARCHAR(100) NOT NULL DEFAULT '',
+  ratio VARCHAR(50) NOT NULL DEFAULT '1',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_model_unit_tags_model (model_unit_id),
+  CONSTRAINT fk_model_unit_tags_model_unit
+    FOREIGN KEY (model_unit_id) REFERENCES model_units(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`;
+
 async function ensureModelUnitsTable() {
   await mysqlPool.query(MODEL_UNITS_DDL);
   await mysqlPool.query(
     "ALTER TABLE model_units ADD COLUMN IF NOT EXISTS table_name VARCHAR(255) NOT NULL DEFAULT '' AFTER model_code"
   );
+  // plc_* 컬럼은 기존 설치에 없을 수 있어 안전하게 추가
+  try {
+    await mysqlPool.query(
+      "ALTER TABLE model_units ADD COLUMN plc_ip VARCHAR(255) NOT NULL DEFAULT '' AFTER table_name"
+    );
+  } catch (e) {
+    if (e.code !== "ER_DUP_FIELDNAME") throw e;
+  }
+  try {
+    await mysqlPool.query(
+      "ALTER TABLE model_units ADD COLUMN plc_port VARCHAR(50) NOT NULL DEFAULT '' AFTER plc_ip"
+    );
+  } catch (e) {
+    if (e.code !== "ER_DUP_FIELDNAME") throw e;
+  }
+  try {
+    await mysqlPool.query(
+      "ALTER TABLE model_units ADD COLUMN plc_use_value VARCHAR(255) NOT NULL DEFAULT '' AFTER plc_port"
+    );
+  } catch (e) {
+    if (e.code !== "ER_DUP_FIELDNAME") throw e;
+  }
   try {
     await mysqlPool.query(
       "ALTER TABLE model_units ADD COLUMN last_auto_learn_at DATETIME NULL AFTER model_generated_at"
@@ -201,6 +245,22 @@ async function ensureModelUnitsTable() {
   }
   await mysqlPool.query(
     "UPDATE model_units SET auto_learn_anchor_at = NOW() WHERE auto_learn = 'ON' AND auto_learn_anchor_at IS NULL"
+  );
+
+  await mysqlPool.query(MODEL_UNIT_TAGS_DDL);
+  try {
+    await mysqlPool.query(
+      "ALTER TABLE model_unit_tags ADD COLUMN description VARCHAR(500) NOT NULL DEFAULT '' AFTER tag_id"
+    );
+  } catch (e) {
+    if (e.code !== "ER_DUP_FIELDNAME") throw e;
+  }
+}
+
+async function ensureCollectionUnitTagsSchema() {
+  await pgPool.query(
+    `ALTER TABLE collection_unit_tags
+     ADD COLUMN IF NOT EXISTS description VARCHAR(500) NOT NULL DEFAULT ''`
   );
 }
 
@@ -220,6 +280,9 @@ function rowToModelUnit(row) {
     model_name: row.model_name,
     model_code: row.model_code,
     table_name: row.table_name ?? "",
+    plc_ip: row.plc_ip ?? "",
+    plc_port: row.plc_port ?? "",
+    plc_use_value: row.plc_use_value ?? "",
     status: row.status ?? "정상",
     auto_learn: row.auto_learn === "OFF" ? "OFF" : "ON",
     auto_control: row.auto_control === "OFF" ? "OFF" : "ON",
@@ -255,6 +318,15 @@ function normalizeModelBody(body, { partial } = {}) {
   }
   if (!partial || Object.prototype.hasOwnProperty.call(b, "table_name")) {
     out.table_name = String(b.table_name ?? "").trim();
+  }
+  if (!partial || Object.prototype.hasOwnProperty.call(b, "plc_ip")) {
+    out.plc_ip = String(b.plc_ip ?? "").trim();
+  }
+  if (!partial || Object.prototype.hasOwnProperty.call(b, "plc_port")) {
+    out.plc_port = String(b.plc_port ?? "").trim();
+  }
+  if (!partial || Object.prototype.hasOwnProperty.call(b, "plc_use_value")) {
+    out.plc_use_value = String(b.plc_use_value ?? "").trim();
   }
   if (!partial || Object.prototype.hasOwnProperty.call(b, "status")) {
     out.status = b.status === "비정상" ? "비정상" : "정상";
@@ -1620,13 +1692,14 @@ app.get(
     ]);
     if (!unitRows[0]) return res.status(404).json({ error: "수집부를 찾을 수 없습니다." });
     const { rows } = await pgPool.query(
-      `SELECT tag_id, data_type, address, ratio FROM collection_unit_tags
+      `SELECT tag_id, description, data_type, address, ratio FROM collection_unit_tags
        WHERE collection_unit_id = $1 ORDER BY sort_order ASC, id ASC`,
       [req.params.id]
     );
     res.json({
       tags: rows.map((r) => ({
         tag_id: r.tag_id ?? "",
+        description: r.description ?? "",
         dataType: r.data_type ?? "DWord",
         address: r.address ?? "",
         ratio: r.ratio ?? "1",
@@ -1657,6 +1730,7 @@ app.put(
 
     const tags = raw.map((t) => ({
       tag_id: String(t.tag_id ?? "").trim(),
+      description: String(t.description ?? "").trim(),
       data_type: normalizeDT(t.dataType),
       address: String(t.address ?? "").trim(),
       ratio: String(t.ratio ?? "1").trim() || "1",
@@ -1669,9 +1743,9 @@ app.put(
       for (let i = 0; i < tags.length; i++) {
         const t = tags[i];
         await client.query(
-          `INSERT INTO collection_unit_tags (collection_unit_id, sort_order, tag_id, data_type, address, ratio)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [unitId, i, t.tag_id, t.data_type, t.address, t.ratio]
+          `INSERT INTO collection_unit_tags (collection_unit_id, sort_order, tag_id, description, data_type, address, ratio)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [unitId, i, t.tag_id, t.description, t.data_type, t.address, t.ratio]
         );
       }
       await client.query("COMMIT");
@@ -1889,6 +1963,76 @@ app.get(
   })
 );
 
+app.get(
+  "/api/model-units/:id/tags",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const [exist] = await mysqlPool.query("SELECT id FROM model_units WHERE id = ?", [id]);
+    if (!exist[0]) return res.status(404).json({ error: "모델을 찾을 수 없습니다." });
+
+    const [rows] = await mysqlPool.query(
+      `SELECT tag_id, description, data_type, address, ratio
+       FROM model_unit_tags
+       WHERE model_unit_id = ?
+       ORDER BY sort_order ASC, id ASC`,
+      [id]
+    );
+
+    res.json({
+      tags: rows.map((r) => ({
+        tag_id: r.tag_id ?? "",
+        description: r.description ?? "",
+        dataType: r.data_type ?? "DWord",
+        address: r.address ?? "",
+        ratio: r.ratio ?? "1",
+      })),
+    });
+  })
+);
+
+app.put(
+  "/api/model-units/:id/tags",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const [exist] = await mysqlPool.query("SELECT id FROM model_units WHERE id = ?", [id]);
+    if (!exist[0]) return res.status(404).json({ error: "모델을 찾을 수 없습니다." });
+
+    const raw = req.body?.tags;
+    if (!Array.isArray(raw)) {
+      return res.status(400).json({ error: "tags 배열이 필요합니다." });
+    }
+
+    const normalizeDT = (v) => {
+      const s = String(v ?? "DWord");
+      return ["Boolean", "Word", "DWord"].includes(s) ? s : "DWord";
+    };
+
+    const tags = raw.map((t) => ({
+      tag_id: String(t.tag_id ?? "").trim(),
+      description: String(t.description ?? "").trim(),
+      data_type: normalizeDT(t.dataType),
+      address: String(t.address ?? "").trim(),
+      ratio: String(t.ratio ?? "1").trim() || "1",
+    }));
+
+    await mysqlPool.query("DELETE FROM model_unit_tags WHERE model_unit_id = ?", [id]);
+    for (let i = 0; i < tags.length; i++) {
+      const t = tags[i];
+      // tag_id/address는 비어있으면 저장하지 않음 (UI에서 빈 행 방지)
+      if (!t.tag_id || !t.address) continue;
+      await mysqlPool.query(
+        `INSERT INTO model_unit_tags (model_unit_id, sort_order, tag_id, description, data_type, address, ratio)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [id, i, t.tag_id, t.description, t.data_type, t.address, t.ratio]
+      );
+    }
+
+    res.json({ ok: true });
+  })
+);
+
 app.post(
   "/api/model-units",
   requireAuth,
@@ -1900,7 +2044,7 @@ app.post(
     try {
       const [result] = await mysqlPool.query(
         `INSERT INTO model_units (
-          model_name, model_code, table_name, status, auto_learn, auto_control,
+          model_name, model_code, table_name, plc_ip, plc_port, plc_use_value, status, auto_learn, auto_control,
           learning_cycle, resample_size, interpolate, fill_method, model_output_path,
           model_generated_at, control_tag_id, min_allowed, max_allowed, change_range, auto_apply, memo
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?)`,
@@ -1908,6 +2052,9 @@ app.post(
           m.model_name,
           m.model_code,
           m.table_name,
+          m.plc_ip,
+          m.plc_port,
+          m.plc_use_value,
           m.status,
           m.auto_learn,
           m.auto_control,
@@ -1960,7 +2107,7 @@ app.put(
     try {
       await mysqlPool.query(
         `UPDATE model_units SET
-          model_name = ?, model_code = ?, table_name = ?, status = ?, auto_learn = ?, auto_control = ?,
+          model_name = ?, model_code = ?, table_name = ?, plc_ip = ?, plc_port = ?, plc_use_value = ?, status = ?, auto_learn = ?, auto_control = ?,
           learning_cycle = ?, resample_size = ?, interpolate = ?, fill_method = ?, model_output_path = ?,
           control_tag_id = ?, min_allowed = ?, max_allowed = ?, change_range = ?, auto_apply = ?, memo = ?,
           model_generated_at = IF(?, NOW(), model_generated_at),
@@ -1970,6 +2117,9 @@ app.put(
           m.model_name,
           m.model_code,
           m.table_name,
+          m.plc_ip,
+          m.plc_port,
+          m.plc_use_value,
           m.status,
           m.auto_learn,
           m.auto_control,
@@ -2007,6 +2157,76 @@ app.put(
   })
 );
 
+async function loadModelUnitTags(modelId) {
+  const [rows] = await mysqlPool.query(
+    `SELECT tag_id, description, data_type, address, ratio
+     FROM model_unit_tags
+     WHERE model_unit_id = ?
+     ORDER BY sort_order ASC, id ASC`,
+    [modelId]
+  );
+  return rows.map((r) => ({
+    tag_id: r.tag_id ?? "",
+    description: r.description ?? "",
+    dataType: r.data_type ?? "DWord",
+    address: r.address ?? "",
+    ratio: r.ratio ?? "1",
+  }));
+}
+
+app.post(
+  "/api/model-units/:id/plc-write",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const [rows] = await mysqlPool.query("SELECT * FROM model_units WHERE id = ?", [id]);
+    if (!rows[0]) return res.status(404).json({ error: "모델을 찾을 수 없습니다." });
+
+    const model = rowToModelUnit(rows[0]);
+    const body = req.body ?? {};
+
+    const plc_ip = String(body.plc_ip ?? model.plc_ip ?? "").trim();
+    const plc_port = String(body.plc_port ?? model.plc_port ?? "502").trim();
+    const plc_use_value = String(body.plc_use_value ?? model.plc_use_value ?? "").trim();
+
+    let tags = body.tags;
+    if (!Array.isArray(tags)) {
+      tags = await loadModelUnitTags(id);
+    } else {
+      tags = tags.map((t) => ({
+        tag_id: String(t.tag_id ?? "").trim(),
+        dataType: t.dataType ?? t.data_type ?? "DWord",
+        address: String(t.address ?? "").trim(),
+        ratio: String(t.ratio ?? "1").trim() || "1",
+      }));
+    }
+
+    const control_tag_id = String(body.control_tag_id ?? model.control_tag_id ?? "").trim();
+
+    const writeResult = await executePlcModbusWrite({
+      plc_ip,
+      plc_port,
+      plc_use_value,
+      tags,
+      control_tag_id,
+    });
+
+    if (!writeResult.ok) {
+      return res.status(500).json({
+        error: writeResult.message,
+        model,
+        plc_write: writeResult,
+      });
+    }
+
+    res.json({
+      model,
+      plc_write: writeResult,
+      message: writeResult.message,
+    });
+  })
+);
+
 app.post(
   "/api/model-units/:id/auto-control",
   requireAuth,
@@ -2022,7 +2242,7 @@ app.post(
 
     await mysqlPool.query(
       `UPDATE model_units SET
-        model_name = ?, model_code = ?, table_name = ?, status = ?, auto_learn = ?, auto_control = ?,
+        model_name = ?, model_code = ?, table_name = ?, plc_ip = ?, plc_port = ?, plc_use_value = ?, status = ?, auto_learn = ?, auto_control = ?,
         learning_cycle = ?, resample_size = ?, interpolate = ?, fill_method = ?, model_output_path = ?,
         control_tag_id = ?, min_allowed = ?, max_allowed = ?, change_range = ?, auto_apply = ?, memo = ?
       WHERE id = ?`,
@@ -2030,6 +2250,9 @@ app.post(
         m.model_name,
         m.model_code,
         m.table_name,
+        m.plc_ip,
+        m.plc_port,
+        m.plc_use_value,
         m.status,
         m.auto_learn,
         m.auto_control,
@@ -2199,7 +2422,7 @@ app.post(
     // 업데이트
     await mysqlPool.query(
       `UPDATE model_units SET
-        model_name = ?, model_code = ?, table_name = ?, status = ?, auto_learn = ?, auto_control = ?,
+        model_name = ?, model_code = ?, table_name = ?, plc_ip = ?, plc_port = ?, plc_use_value = ?, status = ?, auto_learn = ?, auto_control = ?,
         learning_cycle = ?, resample_size = ?, interpolate = ?, fill_method = ?, model_output_path = ?,
         control_tag_id = ?, min_allowed = ?, max_allowed = ?, change_range = ?, auto_apply = ?, memo = ?,
         model_generated_at = NOW()
@@ -2208,6 +2431,9 @@ app.post(
         m.model_name,
         m.model_code,
         m.table_name,
+        m.plc_ip,
+        m.plc_port,
+        m.plc_use_value,
         m.status,
         m.auto_learn,
         m.auto_control,
@@ -2257,7 +2483,7 @@ app.post(
 
     await mysqlPool.query(
       `UPDATE model_units SET
-        model_name = ?, model_code = ?, table_name = ?, status = ?, auto_learn = ?, auto_control = ?,
+        model_name = ?, model_code = ?, table_name = ?, plc_ip = ?, plc_port = ?, plc_use_value = ?, status = ?, auto_learn = ?, auto_control = ?,
         learning_cycle = ?, resample_size = ?, interpolate = ?, fill_method = ?, model_output_path = ?,
         control_tag_id = ?, min_allowed = ?, max_allowed = ?, change_range = ?, auto_apply = ?, memo = ?
       WHERE id = ?`,
@@ -2265,6 +2491,9 @@ app.post(
         m.model_name,
         m.model_code,
         m.table_name,
+        m.plc_ip,
+        m.plc_port,
+        m.plc_use_value,
         m.status,
         m.auto_learn,
         m.auto_control,
@@ -2339,7 +2568,10 @@ app.delete(
 
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(500).json({ error: "서버 오류가 발생했습니다." });
+  const status = Number(err.status) || 500;
+  res.status(status).json({
+    error: status === 500 ? "서버 오류가 발생했습니다." : err.message || "요청 처리에 실패했습니다.",
+  });
 });
 
 async function main() {
@@ -2351,6 +2583,7 @@ async function main() {
     await ensureModelUnitsTable();
     await seedModelUnitsIfEmpty();
     await seedPostgresIfEmpty();
+    await ensureCollectionUnitTagsSchema();
   } catch (e) {
     console.error("[DB] 연결 실패 — MySQL·PostgreSQL 설정과 db/mysql, db/postgresql 스키마를 확인하세요.");
     console.error(e);
