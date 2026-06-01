@@ -151,36 +151,46 @@
               </div>
               <br><br>
               
-              <label class="detail-label">
-                제어 대상 tag_id
-                <input type="text" id="mdlControlTagId" autocomplete="off" />
-              </label>
-              <label class="detail-label">
-                최소 허용값
-                <input type="text" id="mdlMinAllowed" autocomplete="off" />
-              </label>
-              <label class="detail-label">
-                최대 허용값
-                <input type="text" id="mdlMaxAllowed" autocomplete="off" />
-              </label>
-              <label class="detail-label">
-                변경 허용 범위
-                <input type="text" id="mdlChangeRange" autocomplete="off" />
-              </label>
-              <label class="detail-label">
-                자동 적용 여부
-                <select id="mdlAutoApply">
-                  <option value="after_approval">승인 후</option>
-                  <option value="immediate">즉시</option>
+              <div class="detail-section" style="margin-top: 1rem">
+                <div class="detail-section-header">
+                  <h3>자동제어 설정</h3>
+                </div>
+                <div class="detail-section-content" style="display: grid; gap: 0.75rem">
+                  <label class="detail-label">
+                    사용모델명 (현재 업로드된 모델 파일)
+                    <input type="text" id="mdlUsedModelName" readonly class="model-input-readonly" autocomplete="off" />
+                  </label>
+                </div>
+              </div>
+
+              <div class="detail-list-toolbar" style="margin-top: 1rem">
+                <select id="mdlTagPageSize" class="input-light select-compact" aria-label="페이지당 개수">
+                  <option value="10">10개씩</option>
+                  <option value="20">20개씩</option>
+                  <option value="50">50개씩</option>
                 </select>
-              </label>
-              <!-- <label class="detail-label">
-                비고
-                <textarea id="mdlMemo" rows="2" autocomplete="off"></textarea>
-              </label> -->
+                <input
+                  type="search"
+                  id="mdlTagSearch"
+                  class="input-light detail-list-search"
+                  placeholder="전체 검색 (tag_id, description, 갱신주기, 데이터타입, 주소, 배율)"
+                  autocomplete="off"
+                />
+              </div>
+              <div id="mdlTagListMount" class="tag-list-mount tag-list-mount--stacked"></div>
+              <!-- <div class="collection-footer">
+                <span id="mdlTagPager" class="pager-info"></span>
+                <div class="pager-btns">
+                  <button type="button" class="btn btn-outline-light" id="btnMdlTagPrev">이전</button>
+                  <button type="button" class="btn btn-outline-light" id="btnMdlTagNext">다음</button>
+                </div>
+              </div> -->
+              <div class="detail-form-actions" style="margin-top: 1rem">
+                <button type="button" class="btn btn-primary-solid btn-sm" id="btnMdlTagAdd">태그 추가</button>
+              </div>
 
               <div class="detail-form-actions detail-form-actions--wrap">
-                <button type="button" class="btn btn-primary-solid" id="btnMdlToggleAuto" disabled>자동 제어 ON/OFF</button>
+                <button type="button" class="btn btn-primary-solid" id="btnMdlToggleAuto">자동 제어 ON/OFF</button>
               </div>
               <div class="detail-form-actions">
                 <button type="submit" class="btn btn-primary-solid btn-apply" id="btnMdlApply">적용</button>
@@ -194,6 +204,63 @@
     <script src="/js/api.js"></script>
     <script src="/js/layout.js"></script>
     <script src="/js/model-detail.js"></script>
+    <template id="mdlTagRowTpl">
+      <div class="tag-row-block">
+        <div class="tag-card__form-box">
+          <div class="tag-grid-row">
+            <div class="tag-grid-label">tag_id</div>
+            <div class="tag-grid-field">
+              <input type="text" class="tag-grid-input js-tag-id" placeholder="tag_id를 입력해주세요." autocomplete="off" />
+            </div>
+          </div>
+          <div class="tag-grid-row">
+            <div class="tag-grid-label">설명</div>
+            <div class="tag-grid-field">
+              <input type="text" class="tag-grid-input js-tag-description" placeholder="설명을 입력해주세요." autocomplete="off" />
+            </div>
+          </div>
+          <div class="tag-grid-row">
+            <div class="tag-grid-label">갱신주기</div>
+            <div class="tag-grid-field">
+              <input type="text" class="tag-grid-input js-tag-refresh-cycle" placeholder="예: 5분 / 1일" autocomplete="off" />
+            </div>
+          </div>
+          <div class="tag-grid-row tag-grid-row--split">
+            <div class="tag-grid-col">
+              <label class="tag-grid-label">데이터 타입</label>
+              <select class="tag-grid-select js-data-type" aria-label="데이터 타입">
+                <option value="Boolean">Boolean</option>
+                <option value="Word">Word</option>
+                <option value="DWord" selected>DWord</option>
+              </select>
+            </div>
+            <div class="tag-grid-col tag-grid-col--addr">
+              <label class="tag-addr-caption">주소</label>
+              <div class="tag-addr-stack">
+                <div class="tag-addr-row">
+                  <input type="text" class="tag-grid-input tag-addr-input js-tag-addr" placeholder="주소" autocomplete="off" />
+                  <div class="tag-addr-badge js-tag-addr-badge-1">주소 1</div>
+                </div>
+                <div class="tag-addr-row js-tag-addr-row-2">
+                  <input type="text" class="tag-grid-input tag-addr-input js-tag-addr-2" placeholder="주소 2" autocomplete="off" />
+                  <div class="tag-addr-badge js-tag-addr-badge-2">주소 2</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="tag-grid-row">
+            <div class="tag-grid-label">배율</div>
+            <div class="tag-grid-field">
+              <input type="text" class="tag-grid-input js-tag-ratio" value="1" placeholder="배율을 입력해주세요." autocomplete="off" />
+            </div>
+          </div>
+        </div>
+        <div class="tag-row-block__foot">
+          <button type="button" class="btn btn-danger-solid btn-sm" data-remove-tag-row>삭제</button>
+          <button type="button" class="btn btn-primary-solid btn-sm" data-save-tag-row>적용</button>
+        </div>
+      </div>
+    </template>
     <script>
       document.addEventListener("DOMContentLoaded", () => {
         initDashboardPage(() => {

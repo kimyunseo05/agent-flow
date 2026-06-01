@@ -3,6 +3,7 @@ const MODEL_API = "/api/model-units";
 const DEFAULT_TAG = () => ({
   tag_id: "",
   description: "",
+  refresh_cycle: "",
   dataType: "DWord",
   address: "",
   ratio: "1",
@@ -64,6 +65,7 @@ function readRowFromRowEl(rowEl) {
   return {
     tag_id: rowEl.querySelector(".js-tag-id")?.value?.trim() ?? "",
     description: rowEl.querySelector(".js-tag-description")?.value?.trim() ?? "",
+    refresh_cycle: rowEl.querySelector(".js-tag-refresh-cycle")?.value?.trim() ?? "",
     dataType,
     address,
     ratio: rowEl.querySelector(".js-tag-ratio")?.value?.trim() ?? "1",
@@ -122,7 +124,7 @@ function applyTagListPagination() {
 function rowMatchesSearch(rowEl, q) {
   if (!q) return true;
   const d = readRowFromRowEl(rowEl);
-  const hay = `${d.tag_id} ${d.description} ${d.dataType} ${d.address} ${d.ratio}`.toLowerCase();
+  const hay = `${d.tag_id} ${d.description} ${d.refresh_cycle} ${d.dataType} ${d.address} ${d.ratio}`.toLowerCase();
   return hay.includes(q);
 }
 
@@ -310,6 +312,8 @@ function applyTagRowValues(rowEl, tag) {
   rowEl.querySelector(".js-tag-id").value = tag.tag_id ?? "";
   const descEl = rowEl.querySelector(".js-tag-description");
   if (descEl) descEl.value = tag.description ?? "";
+  const cycleEl = rowEl.querySelector(".js-tag-refresh-cycle");
+  if (cycleEl) cycleEl.value = tag.refresh_cycle ?? "";
   const sel = rowEl.querySelector(".js-data-type");
   const dt = ["Boolean", "Word", "DWord"].includes(tag.dataType) ? tag.dataType : "DWord";
   sel.value = dt;

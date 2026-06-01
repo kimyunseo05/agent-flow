@@ -38,7 +38,7 @@
                 type="search"
                 id="tagListSearch"
                 class="input-light detail-list-search"
-                placeholder="전체 검색 (tag_id, 설명, 데이터타입, 주소, 배율)"
+                placeholder="전체 검색 (tag_id, 설명, 갱신주기, 데이터타입, 주소, 배율)"
                 autocomplete="off"
                 aria-label="태그 목록 검색"
               />
@@ -100,6 +100,17 @@
                 type="text"
                 class="tag-grid-input js-tag-description"
                 placeholder="설명을 입력해주세요."
+                autocomplete="off"
+              />
+            </div>
+          </div>
+          <div class="tag-grid-row">
+            <div class="tag-grid-label">갱신주기</div>
+            <div class="tag-grid-field">
+              <input
+                type="text"
+                class="tag-grid-input js-tag-refresh-cycle"
+                placeholder="예: 5분 / 1일"
                 autocomplete="off"
               />
             </div>

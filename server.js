@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS model_unit_tags (
   sort_order INT NOT NULL DEFAULT 0,
   tag_id VARCHAR(255) NOT NULL,
   description VARCHAR(500) NOT NULL DEFAULT '',
+  refresh_cycle VARCHAR(100) NOT NULL DEFAULT '',
   data_type VARCHAR(20) NOT NULL DEFAULT 'DWord',
   address VARCHAR(100) NOT NULL DEFAULT '',
   ratio VARCHAR(50) NOT NULL DEFAULT '1',
@@ -251,6 +252,13 @@ async function ensureModelUnitsTable() {
   try {
     await mysqlPool.query(
       "ALTER TABLE model_unit_tags ADD COLUMN description VARCHAR(500) NOT NULL DEFAULT '' AFTER tag_id"
+    );
+  } catch (e) {
+    if (e.code !== "ER_DUP_FIELDNAME") throw e;
+  }
+  try {
+    await mysqlPool.query(
+      "ALTER TABLE model_unit_tags ADD COLUMN refresh_cycle VARCHAR(100) NOT NULL DEFAULT '' AFTER description"
     );
   } catch (e) {
     if (e.code !== "ER_DUP_FIELDNAME") throw e;
@@ -1972,7 +1980,7 @@ app.get(
     if (!exist[0]) return res.status(404).json({ error: "모델을 찾을 수 없습니다." });
 
     const [rows] = await mysqlPool.query(
-      `SELECT tag_id, description, data_type, address, ratio
+      `SELECT tag_id, description, refresh_cycle, data_type, address, ratio
        FROM model_unit_tags
        WHERE model_unit_id = ?
        ORDER BY sort_order ASC, id ASC`,
@@ -1983,6 +1991,7 @@ app.get(
       tags: rows.map((r) => ({
         tag_id: r.tag_id ?? "",
         description: r.description ?? "",
+        refresh_cycle: r.refresh_cycle ?? "",
         dataType: r.data_type ?? "DWord",
         address: r.address ?? "",
         ratio: r.ratio ?? "1",
@@ -2012,6 +2021,7 @@ app.put(
     const tags = raw.map((t) => ({
       tag_id: String(t.tag_id ?? "").trim(),
       description: String(t.description ?? "").trim(),
+      refresh_cycle: String(t.refresh_cycle ?? "").trim(),
       data_type: normalizeDT(t.dataType),
       address: String(t.address ?? "").trim(),
       ratio: String(t.ratio ?? "1").trim() || "1",
@@ -2023,9 +2033,9 @@ app.put(
       // tag_id/address는 비어있으면 저장하지 않음 (UI에서 빈 행 방지)
       if (!t.tag_id || !t.address) continue;
       await mysqlPool.query(
-        `INSERT INTO model_unit_tags (model_unit_id, sort_order, tag_id, description, data_type, address, ratio)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [id, i, t.tag_id, t.description, t.data_type, t.address, t.ratio]
+        `INSERT INTO model_unit_tags (model_unit_id, sort_order, tag_id, description, refresh_cycle, data_type, address, ratio)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, i, t.tag_id, t.description, t.refresh_cycle, t.data_type, t.address, t.ratio]
       );
     }
 
@@ -2159,7 +2169,7 @@ app.put(
 
 async function loadModelUnitTags(modelId) {
   const [rows] = await mysqlPool.query(
-    `SELECT tag_id, description, data_type, address, ratio
+    `SELECT tag_id, description, refresh_cycle, data_type, address, ratio
      FROM model_unit_tags
      WHERE model_unit_id = ?
      ORDER BY sort_order ASC, id ASC`,
@@ -2168,6 +2178,7 @@ async function loadModelUnitTags(modelId) {
   return rows.map((r) => ({
     tag_id: r.tag_id ?? "",
     description: r.description ?? "",
+    refresh_cycle: r.refresh_cycle ?? "",
     dataType: r.data_type ?? "DWord",
     address: r.address ?? "",
     ratio: r.ratio ?? "1",
@@ -2277,20 +2288,20 @@ app.post(
       return res.json({ model: savedModel, auto_control_run: null });
     }
 
-    const predictionRun = await runSpecificPredictScript(savedModel);
+    const { training_run: trainingRun } = await executeModelTraining(id, { liveLog: true });
 
-    if (!predictionRun.ok) {
-      const detail = predictionRun.stderr_tail || predictionRun.stdout_tail || "예측 로그가 없습니다.";
+    if (!trainingRun.ok) {
+      const detail = trainingRun.stderr_tail || trainingRun.stdout_tail || "학습 로그가 없습니다.";
       return res.status(500).json({
-        error: `자동 제어 실행에 실패했습니다. ${detail}`,
+        error: `자동 제어 학습 실행에 실패했습니다. ${detail}`,
         model: savedModel,
-        auto_control_run: predictionRun,
+        auto_control_run: trainingRun,
       });
     }
 
     return res.json({
       model: savedModel,
-      auto_control_run: predictionRun,
+      auto_control_run: trainingRun,
     });
   })
 );
